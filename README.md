@@ -22,16 +22,19 @@ frozen DAG: it decides what to spawn after seeing what came back. The only limit
 budgets, and a budget being reached is reported to the Captain as a tool result for it to
 reason about — never as a killed run.
 
-## Status: Phase 0 — foundation
+## Status: Phase 1 — control plane
 
-The scaffolding, wire types, schema, and job queue. **Not yet runnable end to end** — there
-is no server, no VM, and no agent. Those are the phases after this one.
+The plane is live: you can create a project, open a thread, and post a message, which opens
+a run and queues its root captain job. **Nothing claims that job yet** — VMs and agents are
+Phase 2, so a run sits at `queued` by design.
 
 | Package | What it is |
 |---|---|
+| `apps/control-plane` | Hono HTTP + websocket API, auth, the event stream, the reaper |
 | `packages/protocol` | zod wire types — jobs, events, addressing, review verdicts |
 | `packages/db` | Drizzle schema, dual Postgres/PGlite bootstrap, idempotent DDL |
 | `packages/queue` | the leased job queue: claim, heartbeat, complete, fail, reap, cancel |
+| `packages/identity` | WorkOS sessions and the AES-256-GCM secrets vault |
 | `packages/env` | dependency-free `.env` loader that never clobbers real config |
 
 ## Getting started
@@ -39,11 +42,56 @@ is no server, no VM, and no agent. Those are the phases after this one.
 ```bash
 pnpm install
 cp .env.example .env
-pnpm test:unit
+openssl rand -base64 32        # put this in KAPI_SECRET_KEY
+pnpm dev:api                   # control plane on :8787
 ```
 
 With `DATABASE_URL` unset everything runs on embedded PGlite — real Postgres compiled to
 WASM, no account, no container, no network.
+
+```bash
+curl localhost:8787/api/health
+PID=$(curl -s -XPOST localhost:8787/api/projects -H 'content-type: application/json' \
+  -d '{"name":"demo","repoUrl":"https://github.com/you/repo.git"}' | jq -r .id)
+TID=$(curl -s -XPOST localhost:8787/api/projects/$PID/threads -d '{}' \
+  -H 'content-type: application/json' | jq -r .id)
+curl -XPOST localhost:8787/api/threads/$TID/messages -H 'content-type: application/json' \
+  -d '{"content":"add a /health endpoint"}'
+```
+
+## API
+
+| Route | Does |
+|---|---|
+| `GET /api/health` | database, auth mode, vault status, queue depth |
+| `GET /api/me` | the authenticated principal |
+| `GET·POST /api/projects` | list and create projects |
+| `GET /api/projects/:id` | one project with its threads and runs |
+| `POST /api/projects/:id/threads` | open a thread |
+| `GET /api/threads/:id` | a thread with its messages |
+| `POST /api/threads/:id/messages` | **starts work** — opens a run, queues the root captain |
+| `GET /api/runs/:id` | run with jobs, agents, events, artifacts |
+| `GET /api/runs/:id/events?after=` | events after a sequence number |
+| `POST /api/runs/:id/cancel` | cancel the captain and everything it spawned |
+| `PUT·GET·DELETE /api/secrets` | vault — values go in, only names come back |
+| `WS /ws?runId=&cursor=` | live event stream, resumable from a cursor |
+
+### Auth
+
+With `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` set, requests carry a WorkOS AuthKit bearer
+token. Without them the plane runs as a single named local user and `/api/health` reports
+`"auth": "dev"` — an unauthenticated mode that is indistinguishable from a real one is how a
+dev shortcut ends up deployed, so this one says so out loud.
+
+### Secrets
+
+Encrypted with AES-256-GCM under `KAPI_SECRET_KEY`. There is no route and no function that
+returns a stored value to a caller — listings return names and scopes only. The single
+egress is `resolve()`, which the plane will call to inject credentials into a VM.
+
+Scope precedence is **task → project → user**, narrowest first. That is what makes per-task
+BYO API keys work: a key attached to one task overrides the project's, which overrides the
+user's.
 
 ## The two mechanisms
 
@@ -79,8 +127,9 @@ Both land on the same foundation, which is why it is Phase 0.
 ## Testing
 
 ```bash
-pnpm test:unit    # protocol schemas + the queue
+pnpm test:unit    # protocol schemas, the queue, the control plane end to end
 pnpm typecheck
+pnpm dev:api      # control plane, watch mode
 pnpm db:reset     # wipe every table (--force required against real Postgres)
 ```
 
@@ -99,7 +148,7 @@ Requires Node 22+ and pnpm 10.
 
 ## Roadmap
 
-1. Control plane — Hono API, WorkOS auth, projects/threads/runs, secrets vault, WS stream
+1. ~~Control plane~~ — done
 2. VM layer + agent bootstrap — a single-file agent that claims jobs over HTTPS
 3. Models on the Vercel AI SDK — Codex subscription OAuth, Gemini/Groq/Cerebras failover,
    per-task BYO keys

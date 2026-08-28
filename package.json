@@ -1,0 +1,31 @@
+{
+  "name": "kapi",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.30.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:unit": "tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts",
+    "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",
+    "db:studio": "drizzle-kit studio --config=packages/db/drizzle.config.ts",
+    "db:reset": "tsx scripts/db-reset.ts",
+    "dev:api": "pnpm --filter @kapi/control-plane dev"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@kapi/control-plane": "workspace:*",
+    "@kapi/db": "workspace:*",
+    "@kapi/env": "workspace:*",
+    "@kapi/identity": "workspace:*",
+    "@kapi/protocol": "workspace:*",
+    "@kapi/queue": "workspace:*",
+    "@types/node": "^22.10.2",
+    "drizzle-kit": "^0.30.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

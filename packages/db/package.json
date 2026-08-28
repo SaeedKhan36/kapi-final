@@ -1,0 +1,14 @@
+{
+  "name": "@kapi/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts", "./schema": "./src/schema.ts" },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@kapi/protocol": "workspace:*",
+    "drizzle-orm": "^0.38.3",
+    "postgres": "^3.4.5"
+  }
+}
