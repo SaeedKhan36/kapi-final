@@ -22,29 +22,58 @@ frozen DAG: it decides what to spawn after seeing what came back. The only limit
 budgets, and a budget being reached is reported to the Captain as a tool result for it to
 reason about — never as a killed run.
 
-## Status: Phase 4 — the Build agent
+## Status: Phase 5 — the Captain
 
-A message opens a run, queues a job, and a **real VM starts, claims it, reasons, edits the
-repository, runs the tests, commits, pushes and opens a pull request**. The Build agent is a
-real agent loop with native tool calling, not a placeholder. Underneath it the model layer
-does provider failover, per-model rotation, budgets, per-task BYO keys and Codex
-subscription sign-in.
+The Captain is a live agent, not a plan. It explores a repository, then delegates by calling
+**`spawn_agents`** with as many workers as the work needs — no fixed count, no fixed order.
+It watches what comes back with `check_agents`/`wait_for_agents`, answers a blocked worker
+with `reply_to_agent`, cancels a line of work that turned out unnecessary with
+`cancel_agent`, and decides what to spawn next from what it just learned. Budgets
+(`maxTotalSpawns`, `maxSpawnDepth`) come back as tool results the model reasons about, never
+as an exception that kills the run.
 
-The **Captain** and **Review** roles are still the Phase 2 echo handler — their loops are
-Phases 5 and 7. Everything underneath them is load-bearing and tested.
+This is the mechanism the whole rebuild exists for. `kapi-old`'s master emitted a frozen task
+graph before any worker started; this Captain cannot do that even if it tried — spawning
+*is* delegation, and it happens whenever the model calls the tool, including strictly after
+seeing an earlier agent's result. That ordering is asserted directly from the event stream's
+sequence numbers in `scripts/test-captain.ts`, not inferred from the model's narration.
+
+The Captain's checkout is deliberately **read-only** — no editor tools, no branch. A captain
+that can write code stops delegating, and the fleet collapses back into one agent, which is
+the exact failure this architecture exists to avoid.
+
+The **Review** role is still the Phase 2 echo handler; its loop is Phase 7.
 
 | Package | What it is |
 |---|---|
 | `apps/control-plane` | Hono HTTP + websocket API, auth, event stream, reaper, provisioner |
 | `apps/agent` | the in-VM binary — one bundled file, claims a job and dials home |
-| `packages/agent-core` | the agent turn loop, its tools, and the Build role |
+| `packages/agent-core` | the turn loop, its tools, and the Build **and Captain** roles |
 | `packages/llm` | model routing on the Vercel AI SDK: keys, failover, rotation, budgets |
 | `packages/vm` | `VmProvider`: local, docker, daytona |
-| `packages/protocol` | zod wire types — jobs, events, addressing, agent API, verdicts |
+| `packages/protocol` | zod wire types — jobs, events, addressing, agent + model API, verdicts |
 | `packages/db` | Drizzle schema, dual Postgres/PGlite bootstrap, idempotent DDL |
 | `packages/queue` | the leased job queue: claim, heartbeat, complete, fail, reap, cancel |
 | `packages/identity` | WorkOS sessions, the AES-256-GCM vault, scoped job tokens |
 | `packages/env` | dependency-free `.env` loader that never clobbers real config |
+
+### The fleet surface
+
+Everything a Captain uses to command other agents dials out through the same `/agent/*`
+job-token auth as the rest of the agent API.
+
+| Route | Does |
+|---|---|
+| `POST /agent/spawn` | enqueue one or more children, gated by the run's total-spawn and depth budgets |
+| `GET /agent/children` | this agent's direct children and their status |
+| `POST /agent/cancel-child` | cancel a child and its whole subtree |
+
+`spawn_agents` returns `{ spawned, refused }` rather than all-or-nothing: a captain over
+budget gets what it can and a reason for the rest, and decides what matters most with what
+is left. `wait_for_agents` polls rather than blocking on a socket — the VM has no inbound
+connectivity, so everything a captain learns, it learns by dialing out and asking — and
+returns early the moment a worker asks a question, since a question answered late is a
+worker that already guessed.
 
 ## Getting started
 
@@ -288,13 +317,18 @@ Both land on the same foundation, which is why it is Phase 0.
 ## Testing
 
 ```bash
-pnpm test:unit      # protocol, queue, control plane, and the agent bootstrap
+pnpm test:unit      # 116 tests: protocol, queue, control plane, agent bootstrap, llm, agent-core, captain
 pnpm typecheck
 pnpm dev:api        # builds the agent bundle, then runs the plane in watch mode
 pnpm build:agent    # bundle apps/agent to a single dist/agent.mjs
 pnpm probe:daytona  # create one real Daytona VM, exercise it, destroy it
 pnpm probe:models   # check which models each configured key can actually reach
 pnpm db:reset       # wipe every table (--force required against real Postgres)
+
+# drive a real run end to end - a Build agent, or a Captain that delegates
+pnpm run:agent --repo=<path|url> --goal="add a subtract function with a test"
+pnpm run:agent --kind=captain --role=captain --repo=<path|url> \
+  --goal="two independent changes - delegate them to separate agents"
 ```
 
 The queue's **concurrency tests require real Postgres and refuse to run on PGlite.** PGlite
@@ -316,7 +350,7 @@ Requires Node 22+ and pnpm 10.
 2. ~~VM layer + agent bootstrap~~ — done
 3. ~~Models on the Vercel AI SDK~~ — done
 4. ~~`agent-core` loop + the Build agent~~ — done
-5. **Captain AI** — unbounded spawn, monitor, triage
+5. ~~Captain AI~~ — unbounded spawn, monitor, triage — done
 6. GitHub App + CI check-runs
 7. Review agent + the fail → fix → re-review → merge loop
 8. Web UI — thread-based chat with the Captain, live agent tree

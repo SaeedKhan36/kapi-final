@@ -1,10 +1,11 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Checkpoint, Job, JobResult } from "@kapi/protocol";
+import type { AgentInboxMessage, Checkpoint, Job, JobResult } from "@kapi/protocol";
 import {
-  BUILD_SYSTEM, BUILD_TOOLS, buildBrief, changedFiles, commitsOnBranch,
-  prepareRepo, runLoop, type GitCredentials, type ToolContext,
+  BUILD_SYSTEM, BUILD_TOOLS, buildBrief, CAPTAIN_SYSTEM, CAPTAIN_TOOLS, captainBrief,
+  changedFiles, commitsOnBranch, prepareRepo, runLoop,
+  type FleetOps, type GitCredentials, type ToolContext,
 } from "@kapi/agent-core";
 import type { PlaneClient } from "./client.ts";
 
@@ -32,7 +33,10 @@ function credentialCache(client: PlaneClient) {
  * dialing out and asking.
  */
 function toolContext(
-  rc: RoleContext, cwd: string, gitCredentials: () => Promise<GitCredentials>,
+  rc: RoleContext,
+  cwd: string,
+  gitCredentials: () => Promise<GitCredentials>,
+  fleet?: FleetOps,
 ): ToolContext {
   return {
     cwd,
@@ -40,6 +44,10 @@ function toolContext(
     runId: rc.job.runId,
     log: (message, extra) => rc.client.log(message, extra),
     gitCredentials,
+    fleet,
+    // Long-running tools poll this. A tool that waits ten minutes on a job the
+    // reaper already handed to another VM is working for a run that moved on.
+    alive: rc.alive,
     askCaptain: async (question, timeoutMs = 120_000) => {
       const parent = rc.job.parentJobId ? `agent:${rc.job.parentJobId}` : "captain";
       rc.client.emit("agent.message", { content: question, question: true }, parent);
@@ -59,6 +67,130 @@ function toolContext(
     },
   };
 }
+
+/**
+ * The captain's command channel.
+ *
+ * Every operation dials out - the VM has no inbound connectivity, so a captain
+ * learns what its fleet is doing by asking, never by being told. The inbox
+ * cursor lives in this closure so repeated polls do not re-read old messages.
+ */
+function fleetOps(client: PlaneClient): FleetOps {
+  let inboxCursor = 0;
+  return {
+    spawn: (agents) => client.spawn(agents),
+    children: () => client.children(),
+    cancelChild: async (jobId, reason) => (await client.cancelChild(jobId, reason)).cancelled,
+    sendTo: async (address, content) => {
+      client.emit("agent.message", { content }, address);
+      // Flushed immediately: a buffered reply is a worker still blocked.
+      await client.flush();
+    },
+    pollInbox: async (): Promise<AgentInboxMessage[]> => {
+      const { messages, cursor } = await client.inbox(inboxCursor);
+      inboxCursor = cursor;
+      return messages;
+    },
+  };
+}
+
+/**
+ * The Captain: understand the goal, delegate it, watch what comes back, decide.
+ *
+ * It never writes code. Its checkout is read-only and its tool list has no
+ * editor in it - a captain that can edit stops delegating, and then the fleet
+ * is one agent again, which is the failure this architecture exists to avoid.
+ *
+ * There is no pipeline here. What it spawns, when, and how many times is the
+ * model's decision from what its agents actually reported.
+ */
+export const captainRole: RoleHandler = async (rc) => {
+  const { job, client } = rc;
+  const context = job.payload.context as {
+    repoUrl?: string; baseBranch?: string; brief?: string;
+  };
+
+  const cwd = await mkdtemp(join(rc.workdir || tmpdir(), "explore-"));
+  const gitCredentials = credentialCache(client);
+  const fleet = fleetOps(client);
+  const ctx = toolContext(rc, cwd, gitCredentials, fleet);
+
+  let creds: GitCredentials | null = null;
+  try {
+    creds = await gitCredentials();
+  } catch {
+    client.log("no git credential - exploring whatever the VM can reach");
+  }
+
+  const repoUrl = context.repoUrl ?? creds?.repoUrl ?? null;
+  const baseBranch = context.baseBranch ?? creds?.baseBranch ?? "main";
+
+  // Failing to clone is not fatal for a captain. It can still delegate from the
+  // goal alone; its instructions are just less specific for it.
+  const prepared = await prepareRepo(ctx, creds, { repoUrl, baseBranch, readOnly: true });
+  client.log(prepared.ok ? prepared.detail : `could not clone: ${prepared.detail}`);
+
+  const resumeFrom = await client.loadCheckpoint().catch(() => null);
+
+  const brief = context.brief ?? captainBrief({
+    goal: job.payload.instruction,
+    acceptance: job.payload.acceptance,
+    repoUrl,
+    baseBranch,
+  });
+
+  const outcome = await runLoop({
+    system: CAPTAIN_SYSTEM,
+    brief,
+    tools: CAPTAIN_TOOLS,
+    ctx,
+    alive: rc.alive,
+    resumeFrom,
+    tier: "reasoning",
+    // A captain spends steps waiting and re-planning rather than editing, so
+    // the build agent's cap is the wrong shape for it.
+    maxSteps: Number(process.env.KAPI_CAPTAIN_MAX_STEPS ?? 60),
+    // Far wider than a build agent's window. A captain's whole job is to hold
+    // what it learned while exploring long enough to write good instructions
+    // from it, and its transcript is cheap - it never writes a file into one.
+    keepFullSteps: Number(process.env.KAPI_CAPTAIN_KEEP_FULL_STEPS ?? 16),
+    callModel: (req) => client.model({
+      tier: req.tier ?? "reasoning",
+      system: req.system,
+      messages: req.messages,
+      tools: req.tools,
+      toolChoice: "auto",
+      maxOutputTokens: req.maxOutputTokens ?? 8192,
+    }),
+    onCheckpoint: async (checkpoint: Checkpoint) => {
+      await client.saveCheckpoint(checkpoint).catch(() => {});
+    },
+  });
+
+  // What the fleet actually produced. This is what a user reads in the thread
+  // and what the review loop will pick up, so it reports the children's work
+  // rather than only the captain's own account of it.
+  const { children } = await client.children().catch(() => ({ children: [] }));
+  const succeeded = children.filter((ch) => ch.status === "succeeded");
+  const failed = children.filter((ch) => ch.status === "failed");
+  const branches = succeeded.map((ch) => ch.branch).filter((b): b is string => Boolean(b));
+
+  const fleetLine = children.length
+    ? `Fleet: ${succeeded.length}/${children.length} agent(s) succeeded` +
+      (failed.length ? `, ${failed.length} failed` : "") +
+      (branches.length ? `. Branches: ${branches.join(", ")}` : "")
+    : "Fleet: no agents were started.";
+
+  return {
+    ok: outcome.ok && failed.length === 0,
+    summary: `${outcome.summary}
+
+${fleetLine}`,
+    filesChanged: [],
+    commits: [],
+    ...(branches.length === 1 ? { branch: branches[0] } : {}),
+  };
+};
 
 /**
  * The Build agent: read the repo, make the change, test it, commit, push.
@@ -169,8 +301,8 @@ export const echoRole: RoleHandler = async ({ job, client, workdir, alive }) => 
 
 export const ROLES: Record<string, RoleHandler> = {
   build: buildRole,
-  // Captain and review get their own loops in the phases after this one.
-  captain: echoRole,
+  captain: captainRole,
+  // The review agent gets its own loop in Phase 7.
   review: echoRole,
 };
 

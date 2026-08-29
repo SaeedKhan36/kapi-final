@@ -2,11 +2,14 @@ import { Hono } from "hono";
 import type { DbHandle } from "@kapi/db";
 import { JobTokenError, verifyJobToken, type JobTokenClaims } from "@kapi/identity";
 import {
-  AgentCompleteRequestSchema, AgentEventsRequestSchema, agentId,
-  type AgentInboxMessage,
+  AgentCancelRequestSchema, AgentCompleteRequestSchema, AgentEventsRequestSchema,
+  AgentSpawnRequestSchema, agentId,
+  type AgentChild, type AgentInboxMessage, type SpawnedAgent, type SpawnRefusal,
 } from "@kapi/protocol";
-import { claim, complete, fail, getJob, heartbeat, markRunning } from "@kapi/queue";
-import { appendEvent } from "@kapi/queue";
+import {
+  appendEvent, cancelSubtree, claim, complete, enqueue, fail, getJob, heartbeat,
+  markRunning, toJob, JOB_COLUMNS, type JobRow,
+} from "@kapi/queue";
 import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
 import { createModelProxy } from "./model-proxy.ts";
@@ -129,20 +132,32 @@ export function createAgentApi(deps: {
     return c.json({ seq });
   });
 
-  /** Messages addressed to this agent, after a cursor. */
+  /**
+   * Messages addressed to this agent, after a cursor.
+   *
+   * The `captain` alias resolves here rather than at the sender: a worker
+   * asking its captain a question should not have to know the captain's job id,
+   * and a worker spawned directly by the plane has no parent to address at all.
+   * Without this the message is written and never delivered, which looks
+   * exactly like a captain choosing not to answer.
+   */
   app.get("/agent/inbox", async (c) => {
     const { jobId, runId } = c.get("claims");
     const after = Number(c.req.query("after") ?? 0);
     const me = agentId(jobId);
+
+    const self = await getJob(handle, jobId);
+    const addresses = [me, "broadcast"];
+    if (self && self.kind === "captain" && self.parentJobId === null) addresses.push("captain");
 
     const rows = await handle.raw<{
       seq: number; from_agent: string; payload: Record<string, unknown>;
     }>(
       `SELECT seq, from_agent, payload FROM events
        WHERE run_id = $1 AND kind = 'agent.message' AND seq > $2
-         AND (to_agent = $3 OR to_agent = 'broadcast')
+         AND to_agent = ANY($3::text[])
        ORDER BY seq ASC LIMIT 100`,
-      [runId, Number.isFinite(after) ? after : 0, me],
+      [runId, Number.isFinite(after) ? after : 0, addresses],
     );
 
     const messages: AgentInboxMessage[] = rows.map((r) => ({
@@ -152,6 +167,209 @@ export function createAgentApi(deps: {
       payload: r.payload ?? {},
     }));
     return c.json({ messages, cursor: messages.at(-1)?.seq ?? after });
+  });
+
+  /* ----------------------------------------------------------------- */
+  /* Spawning, and watching what was spawned                            */
+  /* ----------------------------------------------------------------- */
+
+  /** How deep this job sits under the run's root. The root itself is 0. */
+  const depthOf = async (jobId: string): Promise<number> => {
+    const rows = await handle.raw<{ depth: number }>(
+      `WITH RECURSIVE chain AS (
+         SELECT id, parent_job_id, 0 AS depth FROM jobs WHERE id = $1
+         UNION ALL
+         SELECT j.id, j.parent_job_id, c.depth + 1
+         FROM jobs j JOIN chain c ON j.id = c.parent_job_id
+       )
+       SELECT COALESCE(max(depth), 0) AS depth FROM chain`,
+      [jobId],
+    );
+    return Number(rows[0]?.depth ?? 0);
+  };
+
+  /**
+   * Create agents.
+   *
+   * `runId` and `parentJobId` are taken from the token, exactly as everywhere
+   * else on this surface: an agent says what it wants spawned, never where.
+   *
+   * Budgets do not throw. A captain that asks for six agents and can have two
+   * gets two, plus a note saying why the other four did not happen, and decides
+   * for itself whether to wait, narrow the work, or drop it. Killing the run
+   * instead would make the budget a cliff rather than a constraint, and the
+   * whole architecture is built on the captain staying in the loop.
+   *
+   * The concurrent-VM cap is deliberately NOT applied here. That one is
+   * enforced by the provisioner at VM-start time, so queued work waits for a
+   * free slot rather than being refused - a captain should never be told "no"
+   * for work it can legitimately queue.
+   */
+  app.post("/agent/spawn", async (c) => {
+    const { jobId, runId } = c.get("claims");
+    const parsed = AgentSpawnRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: "invalid spawn request", issues: parsed.error.issues }, 400);
+    }
+
+    const run = await store.getRun(runId);
+    if (!run) return c.json({ error: "run not found" }, 404);
+
+    // repoUrl/baseBranch are how a job finds the repo to clone, and a spawned
+    // child sees nothing of the conversation that decided to create it - only
+    // what lands in its own context. Without inheriting the parent's here,
+    // every child a captain spawns starts with no repo to work in at all.
+    const parentJob = await getJob(handle, jobId);
+    const parentContext = (parentJob?.payload.context ?? {}) as {
+      repoUrl?: string; baseBranch?: string;
+    };
+    const inheritedContext: Record<string, unknown> = {};
+    if (parentContext.repoUrl) inheritedContext.repoUrl = parentContext.repoUrl;
+    if (parentContext.baseBranch) inheritedContext.baseBranch = parentContext.baseBranch;
+
+    const before = run.eventSeq;
+    const depth = (await depthOf(jobId)) + 1;
+    const budget = {
+      totalSpawns: run.totalSpawns,
+      maxTotalSpawns: run.maxTotalSpawns,
+      depth,
+      maxSpawnDepth: run.maxSpawnDepth,
+    };
+
+    const spawned: SpawnedAgent[] = [];
+    const refused: SpawnRefusal[] = [];
+
+    // Soft across processes, like the VM cap: two planes could each read the
+    // same total and jointly overshoot. It is a spend guard, and overshooting
+    // it costs money rather than correctness.
+    let remaining = Math.max(0, run.maxTotalSpawns - run.totalSpawns);
+
+    for (const want of parsed.data.agents) {
+      if (depth > run.maxSpawnDepth) {
+        refused.push({
+          role: want.role, instruction: want.instruction,
+          reason: `spawn depth ${depth} exceeds this run's limit of ${run.maxSpawnDepth}. ` +
+                  `Do this work yourself rather than delegating it further.`,
+        });
+        continue;
+      }
+      if (remaining <= 0) {
+        refused.push({
+          role: want.role, instruction: want.instruction,
+          reason: `the run's total spawn budget of ${run.maxTotalSpawns} is used up. ` +
+                  `No more agents can be created; finish with what is already running.`,
+        });
+        continue;
+      }
+
+      const job = await enqueue(handle, {
+        runId,
+        parentJobId: jobId,
+        kind: want.kind,
+        role: want.role,
+        instruction: want.instruction,
+        acceptance: want.acceptance,
+        touches: want.touches,
+        dependsOn: want.dependsOn,
+        priority: want.priority,
+        maxAttempts: 3,
+        // The spawner's own context wins on conflict - it is free to hand a
+        // child a different repo on purpose, this just stops "nothing at all"
+        // from being the default.
+        context: { ...inheritedContext, ...want.context },
+      });
+      remaining--;
+
+      await handle.transaction(async (tx) => {
+        await appendEvent(tx, {
+          runId, jobId: job.id, kind: "agent.spawned", from: agentId(jobId),
+          payload: {
+            childJobId: job.id, kind: job.kind, role: job.role,
+            instruction: job.payload.instruction, touches: job.payload.touches,
+          },
+        });
+      });
+
+      spawned.push({
+        jobId: job.id, kind: job.kind, role: job.role,
+        instruction: job.payload.instruction,
+      });
+    }
+
+    await flush(runId, before);
+    return c.json({
+      spawned, refused,
+      budget: { ...budget, totalSpawns: budget.totalSpawns + spawned.length },
+    });
+  });
+
+  /**
+   * What this agent spawned, and how it is going.
+   *
+   * Direct children only. A captain that spawned a sub-captain delegated that
+   * subtree along with it, and reporting grandchildren here would invite it to
+   * manage work it handed away.
+   */
+  app.get("/agent/children", async (c) => {
+    const { jobId } = c.get("claims");
+    const rows = await handle.raw<JobRow>(
+      `SELECT ${JOB_COLUMNS} FROM jobs WHERE parent_job_id = $1 ORDER BY created_at ASC`,
+      [jobId],
+    );
+
+    const children: AgentChild[] = rows.map(toJob).map((job) => ({
+      jobId: job.id,
+      kind: job.kind,
+      role: job.role,
+      status: job.status,
+      instruction: job.payload.instruction,
+      attempts: job.attempts,
+      ok: job.result?.ok ?? null,
+      summary: job.result?.summary ?? null,
+      branch: job.result?.branch ?? null,
+      prUrl: job.result?.prUrl ?? null,
+      error: job.error,
+    }));
+
+    return c.json({
+      children,
+      pending: children.filter(
+        (ch) => ch.status === "queued" || ch.status === "claimed" || ch.status === "running",
+      ).length,
+    });
+  });
+
+  /**
+   * Abandon a child and everything it spawned.
+   *
+   * Scoped to the caller's own descendants: a compromised or confused agent
+   * must not be able to cancel a sibling's work, or another run's.
+   */
+  app.post("/agent/cancel-child", async (c) => {
+    const { jobId, runId } = c.get("claims");
+    const parsed = AgentCancelRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "invalid request" }, 400);
+
+    const target = await getJob(handle, parsed.data.jobId);
+    if (!target || target.runId !== runId) return c.json({ error: "no such job" }, 404);
+
+    const owned = await handle.raw<{ id: string }>(
+      `WITH RECURSIVE chain AS (
+         SELECT id, parent_job_id FROM jobs WHERE id = $1
+         UNION ALL
+         SELECT j.id, j.parent_job_id FROM jobs j JOIN chain c ON j.id = c.parent_job_id
+       )
+       SELECT id FROM chain WHERE parent_job_id = $2 OR id = $2`,
+      [target.id, jobId],
+    );
+    if (owned.length === 0) {
+      return c.json({ error: "that job is not one of yours to cancel" }, 403);
+    }
+
+    const before = (await store.getRun(runId))?.eventSeq ?? 0;
+    const cancelled = await cancelSubtree(handle, target.id, parsed.data.reason);
+    await flush(runId, before);
+    return c.json({ cancelled: cancelled.map((j) => j.id) });
   });
 
   /**

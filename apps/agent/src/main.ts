@@ -81,8 +81,22 @@ async function main() {
       say("finished but no longer the lease holder - discarding the result");
       return 1;
     }
-    await client.complete(result);
-    say(`completed: ${result.summary.slice(0, 120)}`);
+
+    // `result.ok` is the agent's own verdict, and it has to route to a
+    // different queue call: `complete()` always marks the job succeeded, with
+    // no retry, while `fail()` requeues up to the job's attempt budget before
+    // dead-lettering. A build agent cut off mid-loop, or a captain whose
+    // model call failed before it could delegate anything, is a FAILURE - and
+    // reporting it through `complete()` would both discard the retry the job
+    // is entitled to AND let a `dependsOn` gate release a downstream job
+    // against work that never actually finished.
+    if (result.ok) {
+      await client.complete(result);
+      say(`completed: ${result.summary.slice(0, 120)}`);
+    } else {
+      await client.failJob(result.summary.slice(0, 4000) || "the agent did not report success");
+      say(`did not finish: ${result.summary.slice(0, 120)}`);
+    }
     return 0;
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);

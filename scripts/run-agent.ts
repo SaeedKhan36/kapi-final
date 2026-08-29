@@ -91,6 +91,9 @@ console.log(`  goal    ${goal}\n`);
 const provisioner = new Provisioner(handle, {
   provider: new LocalProvider(),
   publicUrl: base,
+  // Scoped to this run, so a shared database's leftovers do not get VMs.
+  runId: run.id,
+  intervalMs: 2000,
   onLog: (l) => console.log(`  ${l}`),
 });
 
@@ -111,7 +114,9 @@ const printEvents = async () => {
   }
 };
 
-await provisioner.tick();
+// Must keep running, not tick once: a captain spawns its agents part-way
+// through, and they need VMs after this point, not before it.
+const stopProvisioner = provisioner.start();
 
 const deadline = Date.now() + Number(arg("timeout", "600")) * 1000;
 let final = await getJob(handle, job.id);
@@ -133,6 +138,7 @@ console.log(`  pr       ${final?.result?.prUrl ?? "(none)"}`);
 console.log(`  model    ${runRow?.llmRequests ?? 0} request(s), ${runRow?.llmTokens ?? 0} tokens`);
 console.log(`  jobs     ${(await listJobs(handle, run.id)).length}\n`);
 
+stopProvisioner();
 await provisioner.destroyAll();
 hub.close();
 server.close();

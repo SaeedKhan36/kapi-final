@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:unit": "pnpm build:agent && tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts",
+    "test:unit": "pnpm build:agent && tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
     "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",
     "db:studio": "drizzle-kit studio --config=packages/db/drizzle.config.ts",
     "db:reset": "tsx scripts/db-reset.ts",

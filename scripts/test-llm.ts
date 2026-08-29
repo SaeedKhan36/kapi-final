@@ -156,8 +156,8 @@ await test("consecutive calls rotate across a provider's models", async () => {
 });
 
 await test("a per-tier env override reorders that provider's models", () => {
-  process.env.KAPI_MODELS_CODING = "gemini-2.5-flash";
-  equal(modelsFor("google", "coding")[0], "gemini-2.5-flash", "pinned model leads");
+  process.env.KAPI_MODELS_CODING = "gemini-flash-latest";
+  equal(modelsFor("google", "coding")[0], "gemini-flash-latest", "pinned model leads");
   // An override naming a model this provider does not have must not be sent.
   process.env.KAPI_MODELS_CODING = "llama-3.3-70b-versatile";
   assert(
@@ -193,7 +193,7 @@ await test("an exhausted model is not retried on the next call", async () => {
   const router = withKeys({ GEMINI_API_KEY: "g" }, {
     buildModel: (c: Candidate) => {
       tried.push(c.modelId);
-      return c.modelId.includes("3.5") ? mock({ throws: httpError(429) }) : mock({ text: "ok" });
+      return c.modelId.includes("3.6") ? mock({ throws: httpError(429) }) : mock({ text: "ok" });
     },
   });
 
@@ -202,8 +202,8 @@ await test("an exhausted model is not retried on the next call", async () => {
   tried.length = 0;
   await router.generate({ prompt: "two" });
 
-  assert(firstRound.includes("gemini-3.5-flash"), "the first call did try it");
-  assert(!tried.includes("gemini-3.5-flash"), "the second call skipped the cooled model");
+  assert(firstRound.includes("gemini-3.6-flash"), "the first call did try it");
+  assert(!tried.includes("gemini-3.6-flash"), "the second call skipped the cooled model");
 });
 
 await test("a bad credential skips the whole provider, not one model", async () => {

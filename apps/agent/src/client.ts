@@ -1,6 +1,6 @@
 import type {
-  AgentEventInput, AgentInboxMessage, Checkpoint, EventKind, Job, JobResult,
-  ModelRequest, ModelResponse,
+  AgentChildrenResponse, AgentEventInput, AgentInboxMessage, AgentSpawnResponse,
+  Checkpoint, EventKind, Job, JobResult, ModelRequest, ModelResponse, SpawnRequest,
 } from "@kapi/protocol";
 
 /**
@@ -111,6 +111,25 @@ export class PlaneClient {
       token: string; repoUrl: string | null; baseBranch: string;
       identity: { name: string; email: string };
     }>("GET", "/agent/git-token");
+  }
+
+  /**
+   * Create agents. The plane decides how many actually happen.
+   *
+   * A refusal comes back in `refused` rather than as a thrown error, because
+   * the caller is a reasoning loop: "you may have two of the six you asked for"
+   * is something it can act on, and an exception is not.
+   */
+  spawn(agents: SpawnRequest[]) {
+    return this.#post<AgentSpawnResponse>("/agent/spawn", { agents });
+  }
+
+  children() {
+    return this.#request<AgentChildrenResponse>("GET", "/agent/children");
+  }
+
+  cancelChild(jobId: string, reason?: string) {
+    return this.#post<{ cancelled: string[] }>("/agent/cancel-child", { jobId, reason });
   }
 
   complete(result: JobResult) { return this.#post("/agent/complete", { result }); }

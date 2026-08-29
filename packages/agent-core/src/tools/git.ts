@@ -117,7 +117,7 @@ export const gitPushTool: AgentTool = {
 export async function prepareRepo(
   ctx: Pick<ToolContext, "cwd" | "jobId" | "log">,
   creds: GitCredentials | null,
-  opts: { repoUrl?: string | null; baseBranch?: string } = {},
+  opts: { repoUrl?: string | null; baseBranch?: string; readOnly?: boolean } = {},
 ): Promise<{ ok: boolean; branch: string; detail: string }> {
   const branch = branchName(ctx.jobId);
   const repoUrl = opts.repoUrl ?? creds?.repoUrl ?? null;
@@ -139,6 +139,12 @@ export async function prepareRepo(
         detail: scrub(clone.stderr || clone.stdout, creds?.token).slice(0, 500),
       };
     }
+  }
+
+  // A captain clones to read the code, never to change it. Leaving it on the
+  // base branch means there is no branch for it to accidentally commit onto.
+  if (opts.readOnly) {
+    return { ok: true, branch: base, detail: `read-only checkout of ${base}` };
   }
 
   const identity = creds?.identity ?? { name: "kapi-agent", email: "agent@kapi.local" };

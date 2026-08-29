@@ -40,9 +40,14 @@ const provisioner = new Provisioner(handle, {
   onLog: () => {},
 });
 
-const buildJob = (runId: string, over: Record<string, unknown> = {}) =>
+// This suite tests bootstrap plumbing - claim/heartbeat/complete, VM lifecycle,
+// budgets, crash recovery - not build logic, so `kind: "review"` is deliberate:
+// it maps to the Phase 2 echo handler and needs no real repository to clone.
+// `kind: "build"` now runs the real Build agent (Phase 4), which would fail
+// these jobs outright with no repoUrl in their context.
+const echoJob = (runId: string, over: Record<string, unknown> = {}) =>
   enqueue(handle, {
-    runId, kind: "build", role: "backend", instruction: "echo something",
+    runId, kind: "review", role: "backend", instruction: "echo something",
     acceptance: [], touches: [], dependsOn: [], priority: 0, maxAttempts: 3, context: {},
     ...over,
   });
@@ -103,7 +108,7 @@ await test("the plane rejects an unsigned caller", async () => {
 
 await test("an agent claims, starts, streams, and completes", async () => {
   const s = await seedRun(handle);
-  const job = await buildJob(s.runId);
+  const job = await echoJob(s.runId);
   const token = mintJobToken({ jobId: job.id, runId: s.runId, vmId: "vm-direct" });
   const call = (path: string, body?: unknown, method = "POST") =>
     fetch(`${base}${path}`, {
@@ -145,8 +150,8 @@ await test("a token cannot write into another job's stream", async () => {
   // says, not who it is.
   const mine = await seedRun(handle);
   const theirs = await seedRun(handle);
-  const myJob = await buildJob(mine.runId);
-  const theirJob = await buildJob(theirs.runId);
+  const myJob = await echoJob(mine.runId);
+  const theirJob = await echoJob(theirs.runId);
 
   const token = mintJobToken({ jobId: myJob.id, runId: mine.runId, vmId: "vm-x" });
   await fetch(`${base}/agent/claim`, {
@@ -176,7 +181,7 @@ await test("a token cannot write into another job's stream", async () => {
 
 await test("an evicted agent is told its lease is gone", async () => {
   const s = await seedRun(handle);
-  const job = await buildJob(s.runId);
+  const job = await echoJob(s.runId);
   await claim(handle, { vmId: "vm-first", jobId: job.id, leaseSeconds: 1 });
 
   await sleep(1200);
@@ -198,7 +203,7 @@ group("provisioning a real VM");
 
 await test("the provisioner starts an agent that runs the job to completion", async () => {
   const s = await seedRun(handle);
-  const job = await buildJob(s.runId, { instruction: "prove the bootstrap works" });
+  const job = await echoJob(s.runId, { instruction: "prove the bootstrap works" });
 
   const started = await provisioner.tick();
   assert(started.some((j) => j.id === job.id), "a VM was provisioned for the job");
@@ -225,7 +230,7 @@ await test("the provisioner starts an agent that runs the job to completion", as
 
 await test("a job is not provisioned twice", async () => {
   const s = await seedRun(handle);
-  await buildJob(s.runId);
+  await echoJob(s.runId);
 
   const [first, second] = await Promise.all([provisioner.tick(), provisioner.tick()]);
   const all = [...first, ...second].map((j) => j.id);
@@ -235,7 +240,7 @@ await test("a job is not provisioned twice", async () => {
 await test("the concurrency budget caps how many VMs a run gets at once", async () => {
   const s = await seedRun(handle);
   await handle.raw(`UPDATE runs SET max_concurrent_vms = 2 WHERE id = $1`, [s.runId]);
-  for (let i = 0; i < 5; i++) await buildJob(s.runId, { instruction: `capped ${i}` });
+  for (let i = 0; i < 5; i++) await echoJob(s.runId, { instruction: `capped ${i}` });
 
   const started = await provisioner.tick();
   const forRun = started.filter((j) => j.runId === s.runId);
@@ -264,7 +269,7 @@ await test("a dead VM's job is requeued and a new VM finishes it", async () => {
   // holding it. Here the lease expires, the reaper requeues, and the
   // provisioner starts a replacement.
   const s = await seedRun(handle);
-  const job = await buildJob(s.runId, { instruction: "survive a dead vm" });
+  const job = await echoJob(s.runId, { instruction: "survive a dead vm" });
 
   // Claim it as a VM that then goes away without ever heartbeating.
   await claim(handle, { vmId: "vm-doomed", jobId: job.id, leaseSeconds: 1 });

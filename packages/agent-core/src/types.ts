@@ -1,4 +1,7 @@
-import type { ModelTool, ModelResponse, WireMessage } from "@kapi/protocol";
+import type {
+  AgentChildrenResponse, AgentInboxMessage, AgentSpawnResponse, ModelTool,
+  ModelResponse, SpawnRequest, WireMessage,
+} from "@kapi/protocol";
 
 /** What a tool gets when it runs. Everything here is local to the VM. */
 export type ToolContext = {
@@ -11,6 +14,29 @@ export type ToolContext = {
   gitCredentials: () => Promise<GitCredentials>;
   /** Sends a question to the captain and waits, or gives up. */
   askCaptain: (question: string, timeoutMs?: number) => Promise<string | null>;
+  /**
+   * Present only for an agent allowed to command others - in practice a
+   * captain. A build agent has no fleet, and the tools that need one are simply
+   * not in its tool list, so the model never sees them.
+   */
+  fleet?: FleetOps;
+  /**
+   * False once the lease is lost or the job is cancelled. Long-running tools
+   * must check it: a tool that waits ten minutes on a job the reaper already
+   * reassigned is doing work for a run that has moved on without it.
+   */
+  alive?: () => boolean;
+};
+
+/** What an agent that commands other agents can do. All of it dials the plane. */
+export type FleetOps = {
+  spawn: (agents: SpawnRequest[]) => Promise<AgentSpawnResponse>;
+  children: () => Promise<AgentChildrenResponse>;
+  cancelChild: (jobId: string, reason?: string) => Promise<string[]>;
+  /** Addresses a specific agent, e.g. answering a worker's question. */
+  sendTo: (address: string, content: string) => Promise<void>;
+  /** Anything addressed to this agent since the last call. */
+  pollInbox: () => Promise<AgentInboxMessage[]>;
 };
 
 export type GitCredentials = {

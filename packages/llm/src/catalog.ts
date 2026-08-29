@@ -22,10 +22,12 @@ export const CATALOG: Record<ProviderId, Record<ModelTier, string[]>> = {
    * measured against a real key, not assumed.
    */
   google: {
-    reasoning: ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-flash-latest"],
-    coding: ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-flash-latest"],
-    // gemini-2.5-flash-lite is retired - probed 2026-08-29 and it 404s.
-    cheap: ["gemini-3.1-flash-lite", "gemini-2.5-flash"],
+    // gemini-2.5-flash (and -lite) are retired - probed 2026-08-29 against a
+    // fresh key and both 404 with "no longer available to new users, use
+    // models/gemini-3.6-flash". Confirmed live and answering on that date.
+    reasoning: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest"],
+    coding: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest"],
+    cheap: ["gemini-3.1-flash-lite", "gemini-3.6-flash"],
   },
   groq: {
     reasoning: ["moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile"],

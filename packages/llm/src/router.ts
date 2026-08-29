@@ -65,6 +65,28 @@ export type ObjectArgs<T> = CommonArgs & {
 const QUOTA_COOLDOWN_MS = Number(process.env.KAPI_QUOTA_COOLDOWN_MS ?? 15 * 60 * 1000);
 
 /**
+ * Hard ceiling on a single model call.
+ *
+ * generateText/generateObject have no timeout of their own - a request that
+ * never gets a response (a dropped connection the OS never notices, a
+ * provider that just sits on it) awaits forever, and #withFailover only
+ * fails over on a THROWN error. Without this, one hung call freezes the
+ * whole run: no error, no log, nothing for the failover loop to react to.
+ */
+const MODEL_CALL_TIMEOUT_MS = Number(process.env.KAPI_MODEL_CALL_TIMEOUT_MS ?? 120_000);
+
+/**
+ * A fresh timeout signal for one attempt, combined with the caller's if it
+ * gave one. Built per-attempt (not once per `generate` call) so a candidate
+ * that fails over to a sibling model gets a full new budget rather than
+ * whatever was left on a signal that started ticking on the first try.
+ */
+function callSignal(callerSignal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS);
+  return callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
+}
+
+/**
  * Picks a model, calls it, and moves on when it fails.
  *
  * Two failure shapes matter and they need different answers:
@@ -281,7 +303,9 @@ export class ModelRouter {
   async generate(args: GenerateArgs) {
     const { tier = "coding", ...rest } = args;
     const { value, candidate } = await this.#withFailover(tier, async (model) => {
-      const result = await generateText({ ...rest, model } as Parameters<typeof generateText>[0]);
+      const result = await generateText({
+        ...rest, model, abortSignal: callSignal(rest.abortSignal),
+      } as Parameters<typeof generateText>[0]);
       this.#record(result.usage);
       return result;
     });
@@ -300,7 +324,9 @@ export class ModelRouter {
   ): Promise<{ object: T; provider: ProviderId; modelId: string }> {
     const { tier = "reasoning", ...rest } = args;
     const { value, candidate } = await this.#withFailover(tier, async (model) => {
-      const result = await generateObject({ ...rest, model } as Parameters<typeof generateObject>[0]);
+      const result = await generateObject({
+        ...rest, model, abortSignal: callSignal(rest.abortSignal),
+      } as Parameters<typeof generateObject>[0]);
       this.#record(result.usage);
       return result;
     });

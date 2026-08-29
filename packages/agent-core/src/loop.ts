@@ -60,9 +60,15 @@ export function compact(
     }
   }
 
+  // Naming the actions is not enough on its own: an agent that can no longer
+  // see a file it read will simply read it again, which pushes more out of the
+  // window and turns exploration into a loop. Say plainly that repeating them
+  // is wasted, so the agent works from what it already concluded.
   const summary = actions.length
-    ? `Steps already taken (results omitted to save context):\n` +
-      actions.map((a, i) => `${i + 1}. ${a}`).join("\n")
+    ? `Steps you have ALREADY completed (their output is omitted to save context):\n` +
+      actions.map((a, i) => `${i + 1}. ${a}`).join("\n") +
+      `\n\nDo not repeat these. Re-running one returns the same result and wastes a step. ` +
+      `Act on what you learned from them.`
     : "";
 
   return {

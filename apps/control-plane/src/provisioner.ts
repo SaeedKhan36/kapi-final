@@ -16,6 +16,13 @@ export type ProvisionerOptions = {
   intervalMs?: number;
   /** Where the agent dials back to. Must be reachable FROM the VM. */
   publicUrl?: string;
+  /**
+   * Only provision jobs for this run.
+   *
+   * The CLI drives a single run against a shared database, and without this it
+   * would happily start VMs for every queued job anyone left behind.
+   */
+  runId?: string;
   onLog?: (line: string) => void;
 };
 
@@ -109,6 +116,7 @@ export class Provisioner {
          JOIN runs r ON r.id = j.run_id
          LEFT JOIN live l ON l.run_id = j.run_id
          WHERE j.status = 'queued'
+           AND ($2::text IS NULL OR j.run_id = $2::text)
            AND r.status NOT IN ('cancelled','failed','completed')
            AND NOT EXISTS (
              SELECT 1 FROM agents a WHERE a.job_id = j.id AND a.stopped_at IS NULL
@@ -125,7 +133,7 @@ export class Provisioner {
        WHERE live_count + rn <= max_concurrent_vms
        ORDER BY priority DESC, created_at ASC
        LIMIT $1`,
-      [limit],
+      [limit, this.opts.runId ?? null],
     );
     return rows.map(toJob);
   }
