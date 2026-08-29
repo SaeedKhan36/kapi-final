@@ -133,6 +133,27 @@ export class DaytonaProvider implements VmProvider {
     if (res.stderr) yield { stream: "stderr", data: res.stderr };
   }
 
+  /**
+   * Fire-and-forget. Daytona's exec is request/response and would block for the
+   * agent's entire lifetime, so the command is backgrounded inside the VM with
+   * nohup and its output redirected to a file the plane can read back.
+   */
+  async spawnDetached(id: string, cmd: string, opts: ExecOptions = {}) {
+    const { box } = this.#handle(id);
+    const cwd = this.#resolveCwd(box, opts.cwd);
+    const env = Object.entries(opts.env ?? {})
+      .map(([k, v]) => `export ${k}=${JSON.stringify(v)};`)
+      .join(" ");
+    const res = await this.exec(
+      id,
+      `${env} nohup ${cmd} > ${cwd}/agent.log 2>&1 < /dev/null & echo $!`,
+      { cwd, timeoutMs: 30_000 },
+    );
+    if (res.exitCode !== 0) {
+      throw new VmError(`could not start detached process: ${res.stderr || res.stdout}`, this.name);
+    }
+  }
+
   async writeFile(id: string, path: string, content: string) {
     const { handle, box } = this.#handle(id);
     const abs = this.#resolveCwd(box, path);
@@ -158,6 +179,27 @@ export class DaytonaProvider implements VmProvider {
       await (entry.handle.delete?.() ?? entry.handle.remove?.());
     } finally {
       this.#boxes.delete(id);
+    }
+  }
+
+  /**
+   * Deletes a VM this process never created.
+   *
+   * The control plane keeps its handles in memory, so a restart loses track of
+   * every running VM while Daytona keeps billing for them. Sandboxes are
+   * addressable by id, so reattaching is the difference between a restart
+   * costing nothing and leaking every VM that was live at the time.
+   */
+  async destroyOrphan(id: string) {
+    try {
+      const daytona = await this.#sdk();
+      const handle = await (daytona.get?.(id) ?? daytona.findOne?.({ id }));
+      if (!handle) return false;
+      await (handle.delete?.() ?? handle.remove?.());
+      this.#boxes.delete(id);
+      return true;
+    } catch {
+      return false;
     }
   }
 

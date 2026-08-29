@@ -9,6 +9,8 @@ import {
 import { cancelSubtree, enqueue, getJob, listJobs } from "@kapi/queue";
 import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
+import { createAgentApi } from "./agent-api.ts";
+import { createConnectionRoutes } from "./connections.ts";
 
 type Env = { Variables: { principal: Principal } };
 
@@ -38,11 +40,16 @@ export function createApp(deps: {
   store: Store;
   hub: EventHub;
   auth: Authenticator;
+  vmProvider?: string;
 }) {
   const { handle, store, hub, auth } = deps;
   const app = new Hono<Env>();
 
   app.use("/api/*", cors());
+
+  // Mounted before the /api auth middleware and outside CORS: agents
+  // authenticate with a job token, not a user session, and no browser calls it.
+  app.route("/", createAgentApi({ handle, store, hub }));
 
   /* -------------------------------------------------------------- health */
 
@@ -59,6 +66,7 @@ export function createApp(deps: {
       vault: vaultConfigured() ? "configured" : "NOT configured (set KAPI_SECRET_KEY)",
       queueDepth: Number(rows[0]?.n ?? 0),
       wsClients: hub.clientCount,
+      vmProvider: deps.vmProvider ?? "none",
     });
   });
 
@@ -77,6 +85,9 @@ export function createApp(deps: {
   });
 
   app.get("/api/me", (c) => c.json(c.get("principal")));
+
+  // Mounted after the auth middleware: connecting an account is a user action.
+  app.route("/", createConnectionRoutes({ handle }));
 
   /* ------------------------------------------------------------ projects */
 

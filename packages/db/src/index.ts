@@ -59,9 +59,19 @@ export async function createDb(url = process.env.DATABASE_URL): Promise<DbHandle
       import("postgres"),
     ]);
     const client = postgresMod.default(url, {
-      max: 24,
+      max: Number(process.env.KAPI_DB_POOL_MAX ?? 24),
       // Required for pgbouncer-style poolers (Neon's -pooler endpoints).
       prepare: false,
+      /**
+       * Close our own idle connections before the server closes them for us.
+       *
+       * Neon's pooler drops idle connections, and a connection reaped on the
+       * server side surfaces as a mid-query CONNECTION_CLOSED on the next use.
+       * Recycling client-side keeps that failure out of application code.
+       */
+      idle_timeout: Number(process.env.KAPI_DB_IDLE_TIMEOUT ?? 20),
+      max_lifetime: Number(process.env.KAPI_DB_MAX_LIFETIME ?? 60 * 30),
+      connect_timeout: 30,
       // The idempotent DDL emits a NOTICE per "IF NOT EXISTS" that already
       // exists. Dozens of them on every boot drown out real output.
       onnotice: () => {},

@@ -8,6 +8,26 @@ import { defaultMaxAttempts, leaseSeconds } from "./config.ts";
 
 const LEASED = `('claimed','running')`;
 
+/**
+ * Retries a query once when the connection died underneath it.
+ *
+ * Pooled Postgres (Neon in particular) recycles idle connections, so a query
+ * can fail with CONNECTION_CLOSED through no fault of its own. These queue
+ * operations are single statements and safe to repeat; a lost connection must
+ * not look like a lost job.
+ */
+async function retryOnClosed<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/CONNECTION_CLOSED|CONNECTION_ENDED|ECONNRESET|Connection terminated/i.test(message)) {
+      throw err;
+    }
+    return fn();
+  }
+}
+
 /** Adds a job. This is what a captain's `spawn_agents` tool ultimately calls. */
 export async function enqueue(handle: DbHandle, spec: JobSpec): Promise<Job> {
   const s = JobSpecSchema.parse(spec);
@@ -52,12 +72,17 @@ export async function enqueue(handle: DbHandle, spec: JobSpec): Promise<Job> {
 export async function heartbeat(
   handle: DbHandle, jobId: string, vmId: string, seconds = leaseSeconds(),
 ): Promise<boolean> {
-  const rows = await handle.raw<{ id: string }>(
+  // Retried because it is idempotent: it extends a lease and creates nothing.
+  // `claim`, `complete` and `fail` deliberately do NOT retry - a first attempt
+  // that committed before the connection dropped would make the retry look
+  // like a failure ("lease lost") or hand out a second job, and their callers
+  // poll anyway.
+  const rows = await retryOnClosed(() => handle.raw<{ id: string }>(
     `UPDATE jobs SET lease_expires_at = now() + ($3::int * interval '1 second')
      WHERE id = $1 AND vm_id = $2 AND status IN ${LEASED}
      RETURNING id`,
     [jobId, vmId, seconds],
-  );
+  ));
   if (rows.length === 0) return false;
   await handle.raw(
     `UPDATE agents SET last_heartbeat = now() WHERE job_id = $1 AND vm_id = $2`,
@@ -137,7 +162,9 @@ export async function fail(
       runId: job.runId, jobId: job.id, to: job.status, vmId,
       attempts: job.attempts, detail: error,
     }));
-    if (job.status === "failed") await stopAgent(tx, jobId, "failed");
+    // Same reasoning as the reaper: requeued or dead-lettered, this VM is done
+    // with the job, so its agent row must not look live to the provisioner.
+    await stopAgent(tx, jobId, job.status === "failed" ? "failed" : "retrying");
     return job;
   });
 }

@@ -45,12 +45,13 @@ export async function reap(handle: DbHandle, limit = 100): Promise<Job[]> {
         attempts: job.attempts,
         detail: job.error ?? "lease expired",
       }));
-      if (job.status === "failed") {
-        await tx(
-          `UPDATE agents SET status = 'failed', stopped_at = now() WHERE job_id = $1`,
-          [job.id],
-        );
-      }
+      // Stop the agent row whether the job was requeued or dead-lettered. The
+      // VM that held this lease is gone either way, and a live-looking agent
+      // row is what tells the provisioner not to start a replacement.
+      await tx(
+        `UPDATE agents SET status = $2, stopped_at = now() WHERE job_id = $1`,
+        [job.id, job.status === "failed" ? "failed" : "evicted"],
+      );
     }
     return reaped;
   });

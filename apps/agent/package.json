@@ -1,0 +1,17 @@
+{
+  "name": "@kapi/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/main.ts",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/agent.mjs"
+  },
+  "dependencies": {
+    "@kapi/agent-core": "workspace:*",
+    "@kapi/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  }
+}

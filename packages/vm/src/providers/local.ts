@@ -163,7 +163,10 @@ export class LocalProvider implements VmProvider {
   async spawnDetached(id: string, cmd: string, opts: ExecOptions = {}) {
     const box = this.#box(id);
     const cwd = opts.cwd ? this.#resolveInside(box, opts.cwd) : box.workdir;
-    const child = spawn("bash", ["-lc", cmd], {
+    // Redirected to a file rather than discarded, matching the cloud providers.
+    // An agent whose output goes nowhere is undebuggable, and "the process is
+    // running but nothing happened" is exactly when you need to read it.
+    const child = spawn("bash", ["-lc", `${cmd} > agent.log 2>&1 < /dev/null`], {
       cwd,
       env: { ...process.env, ...this.#env.get(id), ...opts.env },
       stdio: "ignore",

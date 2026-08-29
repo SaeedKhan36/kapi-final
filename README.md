@@ -22,19 +22,28 @@ frozen DAG: it decides what to spawn after seeing what came back. The only limit
 budgets, and a budget being reached is reported to the Captain as a tool result for it to
 reason about — never as a killed run.
 
-## Status: Phase 1 — control plane
+## Status: Phase 4 — the Build agent
 
-The plane is live: you can create a project, open a thread, and post a message, which opens
-a run and queues its root captain job. **Nothing claims that job yet** — VMs and agents are
-Phase 2, so a run sits at `queued` by design.
+A message opens a run, queues a job, and a **real VM starts, claims it, reasons, edits the
+repository, runs the tests, commits, pushes and opens a pull request**. The Build agent is a
+real agent loop with native tool calling, not a placeholder. Underneath it the model layer
+does provider failover, per-model rotation, budgets, per-task BYO keys and Codex
+subscription sign-in.
+
+The **Captain** and **Review** roles are still the Phase 2 echo handler — their loops are
+Phases 5 and 7. Everything underneath them is load-bearing and tested.
 
 | Package | What it is |
 |---|---|
-| `apps/control-plane` | Hono HTTP + websocket API, auth, the event stream, the reaper |
-| `packages/protocol` | zod wire types — jobs, events, addressing, review verdicts |
+| `apps/control-plane` | Hono HTTP + websocket API, auth, event stream, reaper, provisioner |
+| `apps/agent` | the in-VM binary — one bundled file, claims a job and dials home |
+| `packages/agent-core` | the agent turn loop, its tools, and the Build role |
+| `packages/llm` | model routing on the Vercel AI SDK: keys, failover, rotation, budgets |
+| `packages/vm` | `VmProvider`: local, docker, daytona |
+| `packages/protocol` | zod wire types — jobs, events, addressing, agent API, verdicts |
 | `packages/db` | Drizzle schema, dual Postgres/PGlite bootstrap, idempotent DDL |
 | `packages/queue` | the leased job queue: claim, heartbeat, complete, fail, reap, cancel |
-| `packages/identity` | WorkOS sessions and the AES-256-GCM secrets vault |
+| `packages/identity` | WorkOS sessions, the AES-256-GCM vault, scoped job tokens |
 | `packages/env` | dependency-free `.env` loader that never clobbers real config |
 
 ## Getting started
@@ -76,6 +85,154 @@ curl -XPOST localhost:8787/api/threads/$TID/messages -H 'content-type: applicati
 | `PUT·GET·DELETE /api/secrets` | vault — values go in, only names come back |
 | `WS /ws?runId=&cursor=` | live event stream, resumable from a cursor |
 
+### The agent surface
+
+A separate API under `/agent/*`, authenticated by a **job token** rather than a user session
+and mounted outside CORS — no browser belongs here.
+
+| Route | Does |
+|---|---|
+| `POST /agent/claim` | take the job this token was minted for |
+| `POST /agent/start` | claimed → running |
+| `POST /agent/heartbeat` | extend the lease; `ok: false` means stop immediately |
+| `POST /agent/events` | append a batch of events |
+| `GET /agent/inbox?after=` | messages addressed to this agent |
+| `POST /agent/complete` | finish with a result, or an error to fail |
+| `POST /agent/model` | one model call, routed and budgeted by the plane |
+| `PUT·GET /agent/checkpoint` | save and resume the agent's transcript mid-job |
+| `GET /agent/git-token` | a push credential, issued only when a tool needs one |
+
+Every call is **outbound from the VM**. A VM is not addressable inbound — it may sit behind
+NAT, be destroyed at any moment, or never have been reachable at all — so the plane never
+pushes and the agent dials.
+
+Identity comes from the token, never the body: `runId`, `jobId` and the `from` address are
+all taken from the verified token, so a compromised VM cannot write into another run's
+stream or complete a job that is not its own. Tokens are HMAC-signed under a key *derived*
+from `KAPI_SECRET_KEY`, name exactly one job, and expire.
+
+### VMs
+
+`VM_PROVIDER` selects `local` (subprocess in a temp dir — fast, no isolation), `docker`
+(container per agent), or `daytona` (real cloud VMs, ~2s cold start).
+
+The architecture is pull-based, but a VM has to exist before it can pull. The **provisioner**
+creates one per queued job and points it at that job; the agent still claims through the
+ordinary lease, so heartbeats, eviction and the reaper behave exactly as they would for a
+pooled worker. Provisioning targets the job — it does not bypass the queue.
+
+`maxConcurrentVms` caps how many VMs a run holds at once. It is a spend guard applied at
+provisioning rather than at spawn time, so a captain is never refused work it can
+legitimately queue and wait for.
+
+## The agent loop
+
+`packages/agent-core` is the reasoning loop, and it runs **on the VM**. Only the model call
+travels — tools execute right there, against the real filesystem and the real checkout.
+
+Tool calls are native to the model, not prose to be parsed. The old build had to ask for a
+JSON batch of actions and parse it back out, and every malformed response was a lost step;
+that entire failure class is gone.
+
+### Context, and why it is windowed
+
+Appending every observation forever is what makes a long agent loop expensive: each call
+re-sends everything before it, so cost grows quadratically with steps. The old build burned
+**833k tokens in a single run** this way. `compact()` keeps the brief and a sliding window
+of recent steps in full, and reduces older ones to a bare list of the actions taken —
+the agent still knows what it already tried, without paying for the payloads again.
+
+### Landing rather than being cut off
+
+At the step cap the agent is told how many steps remain and asked to commit what it has and
+call `finish` stating what is left. An agent that simply runs out mid-thought leaves a
+branch nobody can interpret, which is worse than an honest partial result.
+
+### Failures that must not kill the job
+
+A tool that throws is caught and its error handed back to the model as text, so it can route
+around the problem the way a human engineer would. A lost lease or a cancelled job is
+checked between steps and stops the loop cleanly. Every step writes a checkpoint, so a job
+that is reaped and retried resumes instead of repaying for the work already done.
+
+### The tools
+
+`list_files`, `read_file`, `grep`, `write_file`, `edit_file`, `run_command`, `run_tests`,
+`git_commit`, `git_push`, `open_pr`, `ask_captain`, `finish`.
+
+A few of these are shaped by what goes wrong rather than by what is convenient. `edit_file`
+refuses a match that is not unique, because a model that meant one occurrence and got three
+has silently corrupted the file. A path resolving outside the repository is refused
+outright. `run_command` refuses `git` and points at the git tools, so branch handling stays
+in one place. Commands are killed on a timeout rather than being allowed to hold the job
+open. Push tokens are scrubbed out of any output before the model or the event stream can
+see them. And a push credential is fetched lazily, only when something actually pushes — a
+token in the VM's environment from the first second is a token in every `env` dump and every
+crash log for the life of the job.
+
+`ask_captain` waits a bounded time and then tells the agent to use its own judgement and
+record the assumption. A worker blocked forever on a captain that is busy, finished or dead
+is a deadlocked run.
+
+## Models
+
+Built on the Vercel AI SDK, so **native tool calling** replaces the JSON-action-batch parsing
+the old build needed. Providers: Codex (subscription OAuth), Google, Groq, Cerebras.
+
+### Where a key comes from
+
+Resolution is **task → project → user → platform**, narrowest first. That is the whole
+mechanism behind per-task BYO keys: attaching a key to one job makes that job, and only that
+job, run on it. Platform env keys come last on purpose — they are the operator's own quota,
+so anything a user supplied is spent before it.
+
+### Failover, and why there are two kinds
+
+Two failure shapes need different answers, and conflating them is expensive:
+
+- **The provider is down, or the key is bad** → try the next *provider*. One 401 condemns
+  the whole provider, because every model behind that key will fail identically.
+- **One model is out of quota** → try a *sibling model on the same provider*.
+
+The second is what makes the free tiers usable. Google's free tier caps requests per model
+per day (20 on a key we measured), not per project, so pinning every call to the best model
+spends a twentieth of the day's capacity per request while its siblings sit idle. Rotating
+across them multiplies usable quota by the number of models.
+
+A `fatal` failure — a malformed request — stops immediately rather than failing over: it
+would repeat identically on every model, so retrying just spends the whole candidate list
+making the same mistake.
+
+```bash
+pnpm probe:models        # ask each configured key which of its models actually answer
+```
+
+Worth running against a new key. Availability varies per key and project, names in the
+public docs can 404, and this is how the old build learned its free tier had no Pro models at
+all. A probe on 2026-08-29 found `gemini-2.5-flash-lite` retired; it was removed from the
+catalog on that evidence rather than left in on faith.
+
+### Budgets
+
+A captain can spawn without limit — that is the point of the architecture, and also how an
+unbounded bill happens. Concurrency is capped by VM budget; total spend is capped by
+`KAPI_MAX_LLM_REQUESTS` and `KAPI_MAX_LLM_TOKENS`, checked *before* each call rather than
+after, because the point is not to make the request that crosses the line.
+
+### Codex sign-in
+
+`POST /api/connections/codex/start` returns a PKCE authorization URL; the callback stores a
+refreshable grant in the same AES-256-GCM envelope as every other secret, and short-lived
+access tokens are minted from it per job.
+
+**This is an undocumented OpenAI surface.** It can change or disappear without notice, so
+nothing depends on it: it is one entry in the router's candidate list, and when it fails the
+key-based providers take over silently. The tests assert exactly that.
+
+> **Daytona needs a reachable control plane.** A cloud VM cannot dial `localhost`. Expose the
+> plane through a tunnel and set `CONTROL_PLANE_PUBLIC_URL`; the provisioner refuses to start
+> a Daytona VM pointed at a loopback address rather than letting it fail silently.
+
 ### Auth
 
 With `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` set, requests carry a WorkOS AuthKit bearer
@@ -110,6 +267,10 @@ as the change itself, with a gap-free per-run sequence number. That single table
 log, the UI feed, and the resume cursor at once — and replaying it reproduces every job's
 status exactly, which the test suite asserts.
 
+Both are exercised against real Postgres and a real VM: the suite kills a VM mid-job and
+asserts that the lease expires, the reaper requeues, a replacement VM starts, and the job
+finishes on its second attempt.
+
 ## Why not the previous version
 
 `../kapi-old` works, and much of it is ported here — the Daytona/Docker/local VM providers,
@@ -127,10 +288,13 @@ Both land on the same foundation, which is why it is Phase 0.
 ## Testing
 
 ```bash
-pnpm test:unit    # protocol schemas, the queue, the control plane end to end
+pnpm test:unit      # protocol, queue, control plane, and the agent bootstrap
 pnpm typecheck
-pnpm dev:api      # control plane, watch mode
-pnpm db:reset     # wipe every table (--force required against real Postgres)
+pnpm dev:api        # builds the agent bundle, then runs the plane in watch mode
+pnpm build:agent    # bundle apps/agent to a single dist/agent.mjs
+pnpm probe:daytona  # create one real Daytona VM, exercise it, destroy it
+pnpm probe:models   # check which models each configured key can actually reach
+pnpm db:reset       # wipe every table (--force required against real Postgres)
 ```
 
 The queue's **concurrency tests require real Postgres and refuse to run on PGlite.** PGlite
@@ -149,10 +313,9 @@ Requires Node 22+ and pnpm 10.
 ## Roadmap
 
 1. ~~Control plane~~ — done
-2. VM layer + agent bootstrap — a single-file agent that claims jobs over HTTPS
-3. Models on the Vercel AI SDK — Codex subscription OAuth, Gemini/Groq/Cerebras failover,
-   per-task BYO keys
-4. `agent-core` loop + the Build agent — edit, test, commit, push, open a PR
+2. ~~VM layer + agent bootstrap~~ — done
+3. ~~Models on the Vercel AI SDK~~ — done
+4. ~~`agent-core` loop + the Build agent~~ — done
 5. **Captain AI** — unbounded spawn, monitor, triage
 6. GitHub App + CI check-runs
 7. Review agent + the fail → fix → re-review → merge loop

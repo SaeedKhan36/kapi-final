@@ -1,0 +1,19 @@
+{
+  "name": "@kapi/llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@ai-sdk/cerebras": "^3.0.40",
+    "@ai-sdk/google": "^4.0.57",
+    "@ai-sdk/groq": "^4.0.34",
+    "@ai-sdk/openai-compatible": "^3.0.40",
+    "@kapi/db": "workspace:*",
+    "@kapi/identity": "workspace:*",
+    "@kapi/protocol": "workspace:*",
+    "ai": "^7.0.84",
+    "zod": "^3.24.1"
+  }
+}
