@@ -6,7 +6,7 @@ import {
   Authenticator, WorkOSError, deleteSecret, listSecrets, putSecret,
   vaultConfigured, type Principal, type SecretScope,
 } from "@kapi/identity";
-import { cancelSubtree, enqueue, getJob, listJobs } from "@kapi/queue";
+import { appendEvent, cancelSubtree, enqueue, getJob, listJobs } from "@kapi/queue";
 import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
 import { createAgentApi } from "./agent-api.ts";
@@ -227,6 +227,14 @@ export function createApp(deps: {
     const roots = jobs.filter((j) => j.parentJobId === null);
     const cancelled = (await Promise.all(roots.map((r) => cancelSubtree(handle, r.id, "cancelled by user")))).flat();
     await store.setRunStatus(id, "cancelled");
+    // One run-level event, so a watching browser does not have to infer the
+    // run's fate from which of N job cancellations happened to be the root's.
+    await handle.transaction(async (tx) => {
+      await appendEvent(tx, {
+        runId: id, kind: "run.status", from: "orchestrator",
+        payload: { status: "cancelled", summary: "cancelled by user" },
+      });
+    });
     for (const e of await store.listEvents(id, 0)) hub.publish(e);
     return c.json({ cancelled: cancelled.length });
   });

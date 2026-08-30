@@ -14,5 +14,9 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["types/**/*.d.ts", "packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "scripts/**/*.ts"]
+  "include": ["types/**/*.d.ts", "packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "scripts/**/*.ts"],
+  // The browser app is checked by its own tsconfig: it needs the DOM lib and
+  // JSX, which nothing else here does, and checking it under a Node-only
+  // config reports errors that do not exist in the environment it runs in.
+  "exclude": ["apps/web"]
 }

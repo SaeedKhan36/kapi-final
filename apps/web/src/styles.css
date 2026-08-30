@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* Ported from kapi-old/apps/web. The palette is the one thing from that build
+   that needed no rethinking. */
+@theme {
+  --color-ink: oklch(0.16 0.012 265);
+  --color-surface: oklch(0.21 0.014 265);
+  --color-raised: oklch(0.26 0.016 265);
+  --color-line: oklch(0.34 0.018 265);
+  --color-muted: oklch(0.68 0.014 265);
+  --color-bright: oklch(0.97 0.004 265);
+  --color-accent: oklch(0.72 0.16 195);
+  --color-ok: oklch(0.74 0.16 155);
+  --color-warn: oklch(0.80 0.15 85);
+  --color-bad: oklch(0.68 0.19 25);
+}
+
+html, body, #root { height: 100%; }
+html, body { background: var(--color-ink); color: var(--color-bright); }
+body { font-feature-settings: "cv02", "cv03", "cv04"; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 9999px; }

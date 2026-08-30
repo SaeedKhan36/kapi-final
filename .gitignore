@@ -9,4 +9,3 @@ dist/
 .output/
 .tanstack/
 apps/web/dist/
-apps/web/src/routeTree.gen.ts

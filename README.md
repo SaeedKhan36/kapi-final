@@ -50,6 +50,7 @@ only the Captain decides whether to spawn a fixer or request another review.
 |---|---|
 | `apps/control-plane` | Hono HTTP + websocket API, auth, event stream, reaper, provisioner |
 | `apps/agent` | the in-VM binary — one bundled file, claims a job and dials home |
+| `apps/web` | the browser UI — thread chat, and the fleet as it spawns itself |
 | `packages/agent-core` | the turn loop, tools, and Build, Captain, and Review roles |
 | `packages/llm` | Codex subscription routing on the Vercel AI SDK: OAuth and budgets |
 | `packages/vm` | `VmProvider`: local, docker, daytona |
@@ -84,6 +85,7 @@ pnpm install
 cp .env.example .env
 openssl rand -base64 32        # put this in KAPI_SECRET_KEY
 pnpm dev:api                   # control plane on :8787
+pnpm dev:web                   # browser UI on :3000, proxied to the plane
 ```
 
 With `DATABASE_URL` unset everything runs on embedded PGlite — real Postgres compiled to
@@ -180,6 +182,54 @@ pooled worker. Provisioning targets the job — it does not bypass the queue.
 `maxConcurrentVms` caps how many VMs a run holds at once. It is a spend guard applied at
 provisioning rather than at spawn time, so a captain is never refused work it can
 legitimately queue and wait for.
+
+## The web UI
+
+`apps/web` is a Vite + React app that talks to the plane and nothing else. There is no
+server half and no SSR: every page is a view onto an authenticated API, so there is nothing
+worth rendering before the session exists. The dark theme is ported from `kapi-old` — it is
+the one part of that UI that needed no rethinking.
+
+```bash
+pnpm dev:web        # :3000, with /api and /ws proxied to the plane, same-origin
+```
+
+A thread is two panes, fed two different ways.
+
+**The conversation is REST.** A turn is `POST /api/threads/:id/messages`, which is not a
+chat completion — it opens a run and queues a root captain. The reply is written when that
+captain's job completes, so minutes of a fleet's work can sit between one message and the
+next, and the UI re-reads the thread exactly once, when the run reaches a terminal state,
+rather than polling throughout.
+
+**The fleet is the event stream.** A run emits thousands of events; a browser polling for
+them is permanently behind the thing it is watching. `WS /ws?runId=&cursor=` streams them
+as they are committed.
+
+### A spawn tree, not a plan
+
+kapi-old drew the run as dependency waves because a frozen task graph existed to draw. Here
+there is nothing to lay out in advance: a captain spawns when it decides to, often strictly
+after seeing what an earlier agent came back with. The only structure a run has is who
+spawned whom, so that is what the view shows — each agent's node carries its own trace, and
+a sub-captain's fleet nests inside it.
+
+The tree is seeded from `GET /api/runs/:id` and then maintained entirely from events:
+`agent.spawned` adds a node under its parent, `job.status` moves it, `review.verdict` and
+`ci.completed` decorate it, and `log` carries the loop's thinking and its tool calls. A
+node whose parent has not arrived yet renders as a root rather than disappearing.
+
+### The cursor is the whole reconnect story
+
+History is paged with `GET /api/runs/:id/events?after=` until it runs out, and the sequence
+number that page-walk ends on is what the socket opens with. The plane replays everything
+after it before going live, so nothing falls into the gap between the last page and the
+socket, and nothing is fetched twice.
+
+The same number is the reconnect point: a dropped socket comes back with the last seq the
+browser rendered, and anything with a lower one is discarded. This works because `events.seq`
+is allocated under the run's row lock — gap-free and strictly ordered per run. A timestamp
+or a global id would be subject to commit-order races and could not be resumed from at all.
 
 ## The agent loop
 
@@ -350,6 +400,6 @@ Requires Node 22+ and pnpm 10.
 5. ~~Captain AI~~ — unbounded spawn, monitor, triage — done
 6. ~~GitHub App + CI check-runs~~ — repo-scoped installation tokens + streamed check results — done
 7. ~~Review agent + adaptive fail → fix loop~~ — structured verdicts, captain-directed fixes — done
-8. Web UI — thread-based chat with the Captain, live agent tree
+8. ~~Web UI~~ — thread chat with the Captain, live agent tree resumed from a cursor — done
 9. Scheduler, orphan-VM reaping, cost accounting
 # kapi-final
