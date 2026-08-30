@@ -113,9 +113,15 @@ await test("an expired lease is requeued and the old VM learns it lost", async (
 
   await sleep(1200);
   const reaped = await reap(handle);
-  equal(reaped.length, 1, "the reaper found it");
-  equal(reaped[0]!.status, "queued", "requeued rather than failed");
-  assert(reaped[0]!.vmId === null, "lease holder cleared");
+  // `reap` is deliberately global. On a remote database the preceding
+  // concurrency tests can take long enough for their uncompleted leases to
+  // expire too, so the result may legitimately contain more than this job.
+  // Assert against the lease this test owns instead of relying on array size
+  // or ordering.
+  const expired = reaped.find((candidate) => candidate.id === job.id);
+  assert(expired, "the reaper found it");
+  equal(expired.status, "queued", "requeued rather than failed");
+  assert(expired.vmId === null, "lease holder cleared");
 
   const second = await claim(handle, { vmId: "vm-b", runId: s.runId });
   assert(second?.id === job.id, "a second VM picked it up");
