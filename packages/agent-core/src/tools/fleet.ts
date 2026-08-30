@@ -24,7 +24,19 @@ function line(child: AgentChild): string {
     const detail = child.summary ?? child.error ?? "(no summary)";
     const pr = child.prUrl ? `\n      pr: ${child.prUrl}` : "";
     const branch = child.branch ? `\n      branch: ${child.branch}` : "";
-    return `${head}  (${verdict})\n      ${detail.replace(/\s+/g, " ").slice(0, 400)}${branch}${pr}`;
+    const review = child.review
+      ? `\n      review: ${child.review.decision}\n` +
+        `      ${child.review.summary.replace(/\s+/g, " ")}\n` +
+        (child.review.findings.length
+          ? child.review.findings.map((finding, index) => {
+              const file = finding.file ? ` ${finding.file}:` : "";
+              const fix = finding.suggestion ? ` Fix: ${finding.suggestion}` : "";
+              return `      ${index + 1}. [${finding.severity}]${file} ${finding.issue}${fix}`;
+            }).join("\n")
+          : "      no findings")
+      : "";
+    return `${head}  (${verdict})\n      ${detail.replace(/\s+/g, " ").slice(0, 400)}` +
+      `${review}${branch}${pr}`;
   }
   return `${head}  — ${child.instruction.replace(/\s+/g, " ").slice(0, 120)}`;
 }
@@ -95,6 +107,31 @@ export const spawnAgentsTool: AgentTool = {
                 "Job ids that must SUCCEED before this one starts. Usually empty — parallel " +
                 "is the point. Use it only for a real ordering constraint.",
             },
+            base_branch: {
+              type: "string",
+              description:
+                "Optional branch this work starts from. For a fixer, this may be the branch " +
+                "whose review requested changes.",
+            },
+            branch: {
+              type: "string",
+              description:
+                "For review agents, the candidate branch to inspect. When depends_on names " +
+                "exactly one build job, its deterministic branch is inferred instead.",
+            },
+            pr_url: {
+              type: "string",
+              description: "Optional pull request URL supplied to a review agent.",
+            },
+            priority: {
+              type: "number",
+              description: "Higher priority runs sooner. Use this for a time-sensitive fixer.",
+            },
+            context: {
+              type: "object",
+              additionalProperties: true,
+              description: "Additional role-specific context. Usually unnecessary.",
+            },
           },
           required: ["instruction"],
         },
@@ -124,7 +161,12 @@ export const spawnAgentsTool: AgentTool = {
         dependsOn: (spec.depends_on as string[] | undefined)
           ?? (spec.dependsOn as string[] | undefined) ?? [],
         priority: Number(spec.priority ?? 0),
-        context: (spec.context as Record<string, unknown> | undefined) ?? {},
+        context: {
+          ...((spec.context as Record<string, unknown> | undefined) ?? {}),
+          ...(spec.base_branch ? { baseBranch: String(spec.base_branch) } : {}),
+          ...(spec.branch ? { branch: String(spec.branch) } : {}),
+          ...(spec.pr_url ? { prUrl: String(spec.pr_url) } : {}),
+        },
       };
     });
 

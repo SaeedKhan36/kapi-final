@@ -111,6 +111,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const commits = [...(resumeFrom?.commits ?? [])];
   let branch = resumeFrom?.branch;
   let prUrl: string | undefined;
+  let terminalMeta: Record<string, unknown> | undefined;
 
   if (resumeFrom?.messages?.length) {
     ctx.log(`resuming from step ${step} with ${messages.length} message(s)`, { resumed: true });
@@ -207,6 +208,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       if (tool.terminal && outcome.ok !== false) {
         finished = true;
         summary = String(input.summary ?? outcome.output);
+        terminalMeta = outcome.meta;
       }
     }
 
@@ -237,6 +239,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
     commits,
     branch,
     ...(prUrl ? { prUrl } : {}),
+    ...(terminalMeta ? { terminalMeta } : {}),
   };
 }
 

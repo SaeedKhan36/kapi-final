@@ -1,35 +1,28 @@
-import { createCerebras } from "@ai-sdk/cerebras";
-import { createGoogle } from "@ai-sdk/google";
-import { createGroq } from "@ai-sdk/groq";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   generateObject, generateText,
   type LanguageModel, type ModelMessage, type ToolSet,
 } from "ai";
-import type { DbHandle } from "@kapi/db";
 import { BudgetTracker, type Budget } from "./budget.ts";
-import { codexApiBase } from "./codex.ts";
-import { modelsFor, PROVIDER_ORDER } from "./catalog.ts";
-import { resolveAllKeys, type ResolveScopes, type ResolvedKey } from "./keys.ts";
+import { codexApiBase, codexHeaders } from "./codex.ts";
+import { modelsFor } from "./catalog.ts";
 import {
   BudgetExceededError, NoModelAvailableError, classifyFailure,
   type AttemptLog, type Candidate, type ModelTier, type ProviderId,
 } from "./types.ts";
 
 export type RouterOptions = {
-  handle?: DbHandle | null;
-  scopes?: ResolveScopes;
   budget?: Budget;
-  /** A live Codex access token, when the user has connected one. */
+  /** A live subscription token from the user's Codex sign-in. */
   codexToken?: string | null;
+  /** ChatGPT account bound to the subscription token. */
+  codexAccountId?: string | null;
   onUsage?: (snapshot: ReturnType<BudgetTracker["snapshot"]>) => void;
   onAttempt?: (log: AttemptLog) => void;
   /** Overrides model construction. Tests use it to force failures. */
   buildModel?: (candidate: Candidate, apiKey: string) => LanguageModel;
   /**
-   * Restricts the router to exactly one model, disabling rotation and
-   * failover. For probing a key model by model, and for pinning a run to a
-   * model already known to have quota.
+   * Restricts the router to exactly one Codex model.
    */
   pin?: { provider: ProviderId; modelId: string };
 };
@@ -87,22 +80,12 @@ function callSignal(callerSignal?: AbortSignal): AbortSignal {
 }
 
 /**
- * Picks a model, calls it, and moves on when it fails.
- *
- * Two failure shapes matter and they need different answers:
- *
- *   - A provider is down or the key is bad -> try the next PROVIDER.
- *   - One model is out of quota -> try a SIBLING model on the same provider.
- *
- * The second is what makes the free tiers usable at all. Google's free tier
- * caps requests per model per day (20 on a real key we measured), not per
- * project, so pinning every call to the best model spends a twentieth of the
- * day's capacity per request while its siblings sit idle. Rotating across them
- * multiplies usable quota by the number of models.
+ * Calls Codex with the user's subscription grant. Model health is still kept
+ * here so a future Codex catalog can contain more than one eligible model
+ * without reintroducing third-party provider failover.
  */
 export class ModelRouter {
   #budget: BudgetTracker;
-  #keys: ResolvedKey[] | null = null;
   /** modelId -> when it may be tried again. */
   #cooldown = new Map<string, number>();
   /** Models this key cannot see at all. Dropped permanently, not cooled down. */
@@ -118,20 +101,11 @@ export class ModelRouter {
   get budget() { return this.#budget; }
   usage() { return this.#budget.snapshot(); }
 
-  /** Credentials, resolved once per router. */
-  async keys(): Promise<ResolvedKey[]> {
-    if (this.#keys) return this.#keys;
-    const resolved = await resolveAllKeys(
-      this.opts.handle ?? null,
-      PROVIDER_ORDER,
-      this.opts.scopes ?? {},
-    );
-    // A Codex grant is a credential like any other, just not one with a key.
-    if (this.opts.codexToken && !resolved.some((k) => k.provider === "codex")) {
-      resolved.unshift({ provider: "codex", apiKey: this.opts.codexToken, source: "oauth" });
-    }
-    this.#keys = resolved;
-    return resolved;
+  /** The only accepted credential is the user's Codex subscription grant. */
+  async keys(): Promise<Array<{ provider: "codex"; apiKey: string; source: "oauth" }>> {
+    return this.opts.codexToken
+      ? [{ provider: "codex", apiKey: this.opts.codexToken, source: "oauth" }]
+      : [];
   }
 
   async isAvailable(): Promise<boolean> {
@@ -189,24 +163,14 @@ export class ModelRouter {
   #model(candidate: Candidate, apiKey: string): LanguageModel {
     if (this.opts.buildModel) return this.opts.buildModel(candidate, apiKey);
 
-    switch (candidate.provider) {
-      case "google":
-        return createGoogle({ apiKey })(candidate.modelId);
-      case "groq":
-        return createGroq({ apiKey })(candidate.modelId);
-      case "cerebras":
-        return createCerebras({ apiKey })(candidate.modelId);
-      case "codex":
-        // A bearer from the OAuth grant, not an API key. The endpoint speaks
-        // the OpenAI wire format, which is the only reason this is expressible
-        // through the same interface as the rest.
-        return createOpenAICompatible({
-          name: "codex",
-          baseURL: codexApiBase(),
-          apiKey,
-          headers: { "originator": "codex_cli_rs" },
-        })(candidate.modelId);
-    }
+    // A bearer from the subscription grant, not an API key. The endpoint
+    // speaks the OpenAI wire format used by the AI SDK adapter.
+    return createOpenAICompatible({
+      name: "codex",
+      baseURL: codexApiBase(),
+      apiKey,
+      headers: codexHeaders(this.opts.codexAccountId),
+    })(candidate.modelId);
   }
 
   #penalise(candidate: Candidate, kind: ReturnType<typeof classifyFailure>) {
@@ -234,8 +198,7 @@ export class ModelRouter {
     const candidates = await this.candidates(tier);
     if (candidates.length === 0) {
       throw new NoModelAvailableError(
-        "no model provider is configured - add a key (GEMINI_API_KEY, GROQ_API_KEY, " +
-        "CEREBRAS_API_KEY) or connect a Codex account",
+        "Codex is not connected - sign in with ChatGPT to use your Codex subscription",
       );
     }
 

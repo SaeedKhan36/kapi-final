@@ -2,6 +2,7 @@ import { z } from "zod";
 import { EventKindSchema } from "./events.ts";
 import { JobKindSchema, JobResultSchema, JobStatusSchema } from "./jobs.ts";
 import { AgentRoleSchema } from "./ids.ts";
+import { ReviewVerdictSchema } from "./review.ts";
 
 /**
  * The agent's side of the wire.
@@ -147,6 +148,7 @@ export const AgentChildSchema = z.object({
   summary: z.string().nullish(),
   branch: z.string().nullish(),
   prUrl: z.string().nullish(),
+  review: ReviewVerdictSchema.nullish(),
   error: z.string().nullish(),
 });
 export type AgentChild = z.infer<typeof AgentChildSchema>;

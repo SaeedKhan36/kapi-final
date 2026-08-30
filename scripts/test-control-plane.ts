@@ -4,7 +4,7 @@ loadEnv();
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 import { createDb, truncateAll } from "@kapi/db";
-import { Authenticator } from "@kapi/identity";
+import { Authenticator, mintJobToken } from "@kapi/identity";
 import { claim, getJob } from "@kapi/queue";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
@@ -230,12 +230,88 @@ await test("connecting with cursor 0 replays the whole run", async () => {
 
 /* ------------------------------------------------------------------ */
 
+group("GitHub check webhooks");
+
+await test("a completed check lands once in the correlated run and captain inbox", async () => {
+  const payload = {
+    action: "completed",
+    repository: { full_name: "kapi/test" },
+    sender: { login: "github-actions[bot]" },
+    installation: { id: 42 },
+    check_run: {
+      id: 1001,
+      name: "unit tests",
+      status: "completed",
+      conclusion: "success",
+      head_sha: "abc123",
+      details_url: "https://github.com/kapi/test/actions/runs/1",
+      check_suite: { id: 501, head_branch: `kapi/${captainJobId}`, head_sha: "abc123" },
+    },
+  };
+
+  const deliver = () => fetch(`${base}/webhooks/github`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-event": "check_run",
+      "x-github-delivery": "delivery-check-1001",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const first = await deliver();
+  equal(first.status, 200, "the completed check was accepted");
+  const second = await deliver();
+  equal(second.status, 200, "a GitHub retry was accepted idempotently");
+
+  const detail = await api<{ events: Array<{
+    kind: string; to: string | null; payload: Record<string, unknown>;
+  }> }>("GET", `/api/runs/${runId}`);
+  const ci = detail.body.events.filter((event) =>
+    event.kind === "ci.completed" && event.payload.deliveryId === "delivery-check-1001"
+  );
+  equal(ci.length, 1, "one stream event was written for the delivery");
+  equal(ci[0]!.to, "captain", "the root captain is the event recipient");
+  equal(ci[0]!.payload.conclusion, "success", "the conclusion is preserved");
+
+  const token = mintJobToken({ jobId: captainJobId, runId, vmId: "test-vm" });
+  const inbox = await fetch(`${base}/agent/inbox?after=0`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  equal(inbox.status, 200, "the captain inbox is readable");
+  const messages = await inbox.json() as {
+    messages: Array<{ from: string; content: string; payload: Record<string, unknown> }>;
+  };
+  assert(
+    messages.messages.some((message) =>
+      message.from === "orchestrator" && message.payload.deliveryId === "delivery-check-1001" &&
+      message.content.includes("unit tests completed with success")
+    ),
+    "the captain receives the CI completion without polling GitHub",
+  );
+});
+
+await test("a non-completed check is ignored", async () => {
+  const res = await fetch(`${base}/webhooks/github`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-github-event": "check_suite" },
+    body: JSON.stringify({
+      action: "requested",
+      repository: { full_name: "kapi/test" },
+      check_suite: { id: 502, status: "queued", head_branch: `kapi/${captainJobId}` },
+    }),
+  });
+  equal(res.status, 202, "an in-progress suite does not write completion state");
+});
+
+/* ------------------------------------------------------------------ */
+
 group("secrets");
 
 await test("a secret goes in and never comes back out", async () => {
   const me = await api<{ userId: string }>("GET", "/api/me");
   const put = await api<{ id: string; name: string }>("PUT", "/api/secrets", {
-    scope: "user", scopeId: me.body.userId, name: "GEMINI_API_KEY", value: "super-secret-value",
+    scope: "user", scopeId: me.body.userId, name: "TEST_SERVICE_TOKEN", value: "super-secret-value",
   });
   equal(put.status, 201, "stored");
   assert(!JSON.stringify(put.body).includes("super-secret-value"), "the write response carries no plaintext");
@@ -243,13 +319,13 @@ await test("a secret goes in and never comes back out", async () => {
   const listed = await api<Array<{ name: string }>>(
     "GET", `/api/secrets?scope=user&scopeId=${me.body.userId}`,
   );
-  assert(listed.body.some((s) => s.name === "GEMINI_API_KEY"), "listed by name");
+  assert(listed.body.some((s) => s.name === "TEST_SERVICE_TOKEN"), "listed by name");
   assert(!JSON.stringify(listed.body).includes("super-secret-value"), "the listing carries no plaintext");
 });
 
 await test("the stored value is encrypted at rest", async () => {
   const rows = await handle.raw<{ ciphertext: string; iv: string; tag: string }>(
-    `SELECT ciphertext, iv, tag FROM secrets WHERE name = 'GEMINI_API_KEY'`,
+    `SELECT ciphertext, iv, tag FROM secrets WHERE name = 'TEST_SERVICE_TOKEN'`,
   );
   const row = rows[0];
   assert(row, "the row exists");
@@ -261,14 +337,14 @@ await test("resolve reads it back, narrowest scope winning", async () => {
   const { resolve } = await import("@kapi/identity");
   const me = await api<{ userId: string }>("GET", "/api/me");
 
-  const atUser = await resolve(handle, "GEMINI_API_KEY", { userId: me.body.userId });
+  const atUser = await resolve(handle, "TEST_SERVICE_TOKEN", { userId: me.body.userId });
   equal(atUser?.value, "super-secret-value", "round-trips through AES-GCM");
   equal(atUser?.scope, "user", "found at user scope");
 
   await api("PUT", "/api/secrets", {
-    scope: "project", scopeId: projectId, name: "GEMINI_API_KEY", value: "project-value",
+    scope: "project", scopeId: projectId, name: "TEST_SERVICE_TOKEN", value: "project-value",
   });
-  const atProject = await resolve(handle, "GEMINI_API_KEY", {
+  const atProject = await resolve(handle, "TEST_SERVICE_TOKEN", {
     userId: me.body.userId, projectId,
   });
   equal(atProject?.value, "project-value", "the project key overrides the user's");
@@ -277,7 +353,7 @@ await test("resolve reads it back, narrowest scope winning", async () => {
 
 await test("a secret cannot be written into someone else's scope", async () => {
   const res = await api("PUT", "/api/secrets", {
-    scope: "project", scopeId: "prj_not_mine", name: "GEMINI_API_KEY", value: "x",
+    scope: "project", scopeId: "prj_not_mine", name: "TEST_SERVICE_TOKEN", value: "x",
   });
   equal(res.status, 404, "refused");
 });
@@ -285,7 +361,7 @@ await test("a secret cannot be written into someone else's scope", async () => {
 await test("a lowercase secret name is rejected", async () => {
   const me = await api<{ userId: string }>("GET", "/api/me");
   const res = await api("PUT", "/api/secrets", {
-    scope: "user", scopeId: me.body.userId, name: "gemini_key", value: "x",
+    scope: "user", scopeId: me.body.userId, name: "lowercase_token", value: "x",
   });
   equal(res.status, 400, "names must be env-var shaped");
 });
@@ -293,13 +369,13 @@ await test("a lowercase secret name is rejected", async () => {
 await test("a secret can be deleted", async () => {
   const me = await api<{ userId: string }>("GET", "/api/me");
   const res = await api<{ deleted: boolean }>(
-    "DELETE", `/api/secrets/user/${me.body.userId}/GEMINI_API_KEY`,
+    "DELETE", `/api/secrets/user/${me.body.userId}/TEST_SERVICE_TOKEN`,
   );
   equal(res.status, 200, "deleted");
   const listed = await api<Array<{ name: string }>>(
     "GET", `/api/secrets?scope=user&scopeId=${me.body.userId}`,
   );
-  assert(!listed.body.some((s) => s.name === "GEMINI_API_KEY"), "gone from the listing");
+  assert(!listed.body.some((s) => s.name === "TEST_SERVICE_TOKEN"), "gone from the listing");
 });
 
 wss.close();

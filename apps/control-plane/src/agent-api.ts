@@ -3,7 +3,7 @@ import type { DbHandle } from "@kapi/db";
 import { JobTokenError, verifyJobToken, type JobTokenClaims } from "@kapi/identity";
 import {
   AgentCancelRequestSchema, AgentCompleteRequestSchema, AgentEventsRequestSchema,
-  AgentSpawnRequestSchema, agentId,
+  AgentSpawnRequestSchema, agentId, normaliseVerdict,
   type AgentChild, type AgentInboxMessage, type SpawnedAgent, type SpawnRefusal,
 } from "@kapi/protocol";
 import {
@@ -151,10 +151,10 @@ export function createAgentApi(deps: {
     if (self && self.kind === "captain" && self.parentJobId === null) addresses.push("captain");
 
     const rows = await handle.raw<{
-      seq: number; from_agent: string; payload: Record<string, unknown>;
+      seq: number; kind: string; from_agent: string; payload: Record<string, unknown>;
     }>(
-      `SELECT seq, from_agent, payload FROM events
-       WHERE run_id = $1 AND kind = 'agent.message' AND seq > $2
+      `SELECT seq, kind, from_agent, payload FROM events
+       WHERE run_id = $1 AND kind IN ('agent.message', 'ci.completed') AND seq > $2
          AND to_agent = ANY($3::text[])
        ORDER BY seq ASC LIMIT 100`,
       [runId, Number.isFinite(after) ? after : 0, addresses],
@@ -163,7 +163,8 @@ export function createAgentApi(deps: {
     const messages: AgentInboxMessage[] = rows.map((r) => ({
       seq: Number(r.seq),
       from: r.from_agent,
-      content: String(r.payload?.content ?? ""),
+      content: String(r.payload?.content ??
+        (r.kind === "ci.completed" ? "GitHub CI completed." : "")),
       payload: r.payload ?? {},
     }));
     return c.json({ messages, cursor: messages.at(-1)?.seq ?? after });
@@ -328,6 +329,7 @@ export function createAgentApi(deps: {
       summary: job.result?.summary ?? null,
       branch: job.result?.branch ?? null,
       prUrl: job.result?.prUrl ?? null,
+      review: job.result?.review ?? null,
       error: job.error,
     }));
 
@@ -382,14 +384,35 @@ export function createAgentApi(deps: {
     if (!parsed.success) return c.json({ error: "invalid request", issues: parsed.error.issues }, 400);
 
     const before = (await store.getRun(runId))?.eventSeq ?? 0;
+    const result = parsed.data.result?.review
+      ? { ...parsed.data.result, review: normaliseVerdict(parsed.data.result.review) }
+      : parsed.data.result;
     const job = parsed.data.error
       ? await fail(handle, jobId, vmId, parsed.data.error)
       : await complete(
           handle, jobId, vmId,
-          parsed.data.result ?? { ok: true, summary: "finished", filesChanged: [], commits: [] },
+          result ?? { ok: true, summary: "finished", filesChanged: [], commits: [] },
         );
 
     if (!job) return c.json({ ok: false, reason: "lease lost" }, 409);
+    if (result?.review) {
+      await handle.transaction(async (tx) => {
+        await tx(
+          `INSERT INTO artifacts (id, run_id, job_id, kind, body)
+           VALUES ($1, $2, $3, 'review.verdict', $4)
+           ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, created_at = now()`,
+          [`review_${jobId}`, runId, jobId, JSON.stringify(result.review)],
+        );
+        await appendEvent(tx, {
+          runId,
+          jobId,
+          kind: "review.verdict",
+          from: agentId(jobId),
+          to: "captain",
+          payload: { ...result.review, reviewerJobId: jobId },
+        });
+      });
+    }
     await flush(runId, before);
     return c.json({ ok: true, status: job.status });
   });

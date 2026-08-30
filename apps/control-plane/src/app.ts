@@ -11,6 +11,7 @@ import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
 import { createAgentApi } from "./agent-api.ts";
 import { createConnectionRoutes } from "./connections.ts";
+import { createGithubWebhookRoutes } from "./github-webhook.ts";
 
 type Env = { Variables: { principal: Principal } };
 
@@ -46,6 +47,10 @@ export function createApp(deps: {
   const app = new Hono<Env>();
 
   app.use("/api/*", cors());
+
+  // GitHub authenticates this route with its webhook signature, not with a
+  // browser session. It must be mounted before the /api WorkOS middleware.
+  app.route("/", createGithubWebhookRoutes({ handle, store, hub }));
 
   // Mounted before the /api auth middleware and outside CORS: agents
   // authenticate with a job token, not a user session, and no browser calls it.

@@ -1,10 +1,14 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentInboxMessage, Checkpoint, Job, JobResult } from "@kapi/protocol";
+import {
+  renderChangeRequest,
+  type AgentInboxMessage, type Checkpoint, type Job, type JobResult,
+} from "@kapi/protocol";
 import {
   BUILD_SYSTEM, BUILD_TOOLS, buildBrief, CAPTAIN_SYSTEM, CAPTAIN_TOOLS, captainBrief,
-  changedFiles, commitsOnBranch, prepareRepo, runLoop,
+  REVIEW_SYSTEM, REVIEW_TOOLS, changedFiles, commitsOnBranch, prepareRepo,
+  reviewBrief, runLoop, verdictFromOutcome,
   type FleetOps, type GitCredentials, type ToolContext,
 } from "@kapi/agent-core";
 import type { PlaneClient } from "./client.ts";
@@ -277,6 +281,115 @@ export const buildRole: RoleHandler = async (rc) => {
 };
 
 /**
+ * The Review agent: clone the candidate branch, inspect it without write
+ * tools, and return a normalized structured verdict to its captain.
+ */
+export const reviewRole: RoleHandler = async (rc) => {
+  const { job, client } = rc;
+  const context = job.payload.context as {
+    repoUrl?: string; baseBranch?: string; branch?: string;
+    prUrl?: string; brief?: string;
+  };
+
+  // Depending on one build job is the natural review handoff. Its branch name
+  // is deterministic, so a captain need not copy it through free-form context.
+  const targetBranch = context.branch ??
+    (job.dependsOn.length === 1 ? `kapi/${job.dependsOn[0]}` : null);
+  if (!targetBranch) {
+    return {
+      ok: false,
+      summary:
+        "review target missing: pass context.branch or depend on exactly one build job",
+      filesChanged: [], commits: [],
+    };
+  }
+
+  const cwd = await mkdtemp(join(rc.workdir || tmpdir(), "review-"));
+  const gitCredentials = credentialCache(client);
+  const ctx = toolContext(rc, cwd, gitCredentials);
+
+  let creds: GitCredentials | null = null;
+  try {
+    creds = await gitCredentials();
+  } catch {
+    client.log("no git credential available - review can only use a public repository");
+  }
+
+  const repoUrl = context.repoUrl ?? creds?.repoUrl ?? null;
+  const baseBranch = context.baseBranch ?? creds?.baseBranch ?? "main";
+  const prepared = await prepareRepo(ctx, creds, {
+    repoUrl,
+    baseBranch: targetBranch,
+    readOnly: true,
+  });
+  if (!prepared.ok) {
+    return {
+      ok: false,
+      summary: `could not prepare review branch ${targetBranch}: ${prepared.detail}`,
+      filesChanged: [], commits: [],
+    };
+  }
+  client.log(`reviewing ${targetBranch} against ${baseBranch}`);
+
+  const resumeFrom = await client.loadCheckpoint().catch(() => null);
+  const brief = context.brief ?? reviewBrief({
+    instruction: job.payload.instruction,
+    acceptance: job.payload.acceptance,
+    repoUrl,
+    baseBranch,
+    branch: targetBranch,
+    prUrl: context.prUrl,
+  });
+
+  const outcome = await runLoop({
+    system: REVIEW_SYSTEM,
+    brief,
+    tools: REVIEW_TOOLS,
+    ctx,
+    alive: rc.alive,
+    resumeFrom,
+    tier: "reasoning",
+    maxSteps: Number(process.env.KAPI_REVIEW_MAX_STEPS ?? 30),
+    keepFullSteps: Number(process.env.KAPI_REVIEW_KEEP_FULL_STEPS ?? 10),
+    callModel: (req) => client.model({
+      tier: req.tier ?? "reasoning",
+      system: req.system,
+      messages: req.messages,
+      tools: req.tools,
+      toolChoice: "auto",
+      maxOutputTokens: req.maxOutputTokens ?? 8192,
+    }),
+    onCheckpoint: async (checkpoint: Checkpoint) => {
+      await client.saveCheckpoint({ ...checkpoint, branch: targetBranch }).catch(() => {});
+    },
+  });
+
+  const verdict = verdictFromOutcome(outcome.terminalMeta);
+  if (!outcome.ok || !verdict) {
+    return {
+      ok: false,
+      summary: verdict ? outcome.summary : `${outcome.summary} No valid review verdict was submitted.`,
+      filesChanged: [], commits: [], branch: targetBranch,
+    };
+  }
+
+  const summary = verdict.decision === "request_changes"
+    ? renderChangeRequest(verdict)
+    : `Review approved: ${verdict.summary}`;
+  return {
+    // request_changes is a completed review, not an infrastructure failure.
+    // The captain receives the decision and chooses whether to spawn a fixer.
+    ok: true,
+    summary,
+    review: verdict,
+    filesChanged: [],
+    commits: [],
+    branch: targetBranch,
+    ...(context.prUrl ? { prUrl: context.prUrl } : {}),
+  };
+};
+
+/**
  * Phase 2 placeholder, still used by roles without their own loop yet.
  * Exercises the bootstrap path without a model in the picture.
  */
@@ -302,8 +415,7 @@ export const echoRole: RoleHandler = async ({ job, client, workdir, alive }) => 
 export const ROLES: Record<string, RoleHandler> = {
   build: buildRole,
   captain: captainRole,
-  // The review agent gets its own loop in Phase 7.
-  review: echoRole,
+  review: reviewRole,
 };
 
 export const handlerFor = (kind: string): RoleHandler => ROLES[kind] ?? echoRole;

@@ -1,13 +1,16 @@
 import { Hono } from "hono";
 import { jsonSchema, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai";
 import type { DbHandle } from "@kapi/db";
-import type { JobTokenClaims } from "@kapi/identity";
+import {
+  GitHubApp, GitHubAppError, parseRepoUrl, readAppConfig,
+  type JobTokenClaims,
+} from "@kapi/identity";
 import {
   CheckpointSchema, ModelRequestSchema, newId,
   type Checkpoint, type ModelResponse,
 } from "@kapi/protocol";
 import { getJob } from "@kapi/queue";
-import { accessTokenFor, BudgetExceededError, ModelRouter } from "@kapi/llm";
+import { BudgetExceededError, credentialFor, ModelRouter } from "@kapi/llm";
 
 type Env = { Variables: { claims: JobTokenClaims } };
 
@@ -26,6 +29,10 @@ type RunContext = {
 export function createModelProxy(deps: { handle: DbHandle }) {
   const { handle } = deps;
   const app = new Hono<Env>();
+  const githubConfig = readAppConfig();
+  // One client per plane process so hour-long installation tokens are reused
+  // until their refresh window rather than minted for every git operation.
+  const githubApp = githubConfig ? new GitHubApp(githubConfig) : null;
 
   /** The run, its owner, and what it has spent so far. */
   async function context(runId: string): Promise<RunContext | null> {
@@ -95,15 +102,14 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       });
     }
 
+    const codex = await credentialFor(handle, ctx.userId).catch(() => null);
     const router = new ModelRouter({
-      handle,
-      // Narrowest first: a key attached to THIS job wins over the project's.
-      scopes: { taskId: jobId, projectId: ctx.projectId, userId: ctx.userId },
       budget: {
         maxRequests: Math.max(1, ctx.maxRequests - ctx.llmRequests),
         maxTokens: Math.max(1, ctx.maxTokens - ctx.llmTokens),
       },
-      codexToken: await accessTokenFor(handle, ctx.userId).catch(() => null),
+      codexToken: codex?.accessToken,
+      codexAccountId: codex?.accountId,
     });
 
     try {
@@ -208,28 +214,48 @@ export function createModelProxy(deps: { handle: DbHandle }) {
    * whole life of the job.
    */
   app.get("/agent/git-token", async (c) => {
-    const { runId, jobId } = c.get("claims");
+    const { runId } = c.get("claims");
     const ctx = await context(runId);
     if (!ctx) return c.json({ error: "run not found" }, 404);
 
-    const { resolve } = await import("@kapi/identity");
-    const hit = await resolve(handle, "GITHUB_TOKEN", {
-      taskId: jobId, projectId: ctx.projectId, userId: ctx.userId,
-    });
-    const token = hit?.value ?? process.env.GITHUB_TOKEN;
-    if (!token) {
-      return c.json(
-        { error: "no GitHub credential is configured, so branches stay local to the VM" },
-        404,
-      );
-    }
     const rows = await handle.raw<{ repo_url: string; default_branch: string }>(
       `SELECT repo_url, default_branch FROM projects WHERE id = $1`, [ctx.projectId],
     );
+    const project = rows[0];
+    if (!project) return c.json({ error: "project not found" }, 404);
+
+    const ref = parseRepoUrl(project.repo_url);
+    if (!ref) {
+      return c.json(
+        { error: "the project repository is not hosted on GitHub, so no GitHub App token can be issued" },
+        400,
+      );
+    }
+
+    if (!githubApp) {
+      return c.json(
+        { error: "the GitHub App is not configured (set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY)" },
+        404,
+      );
+    }
+
+    let token: string;
+    try {
+      token = await githubApp.tokenFor(ref);
+    } catch (err) {
+      if (err instanceof GitHubAppError) {
+        return c.json(
+          { error: err.message, ...(err.installUrl ? { installUrl: err.installUrl } : {}) },
+          err.installUrl ? 409 : 502,
+        );
+      }
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 502);
+    }
+
     return c.json({
       token,
-      repoUrl: rows[0]?.repo_url ?? null,
-      baseBranch: rows[0]?.default_branch ?? "main",
+      repoUrl: project.repo_url,
+      baseBranch: project.default_branch ?? "main",
       identity: {
         name: process.env.GIT_AUTHOR_NAME ?? "kapi-agent",
         email: process.env.GIT_AUTHOR_EMAIL ?? "agent@kapi.local",

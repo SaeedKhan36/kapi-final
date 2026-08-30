@@ -3,52 +3,25 @@ import type { ModelTier, ProviderId } from "./types.ts";
 /**
  * Which models each provider offers per tier, best first.
  *
- * Ordered lists rather than one pinned name because model availability varies
- * by key: a name in the public docs can 404 for a given project, and a free
- * tier can exhaust one model while its siblings still answer.
+ * Kept as lists so model selection can expand within Codex without changing
+ * the agent protocol or reopening the router to third-party providers.
  */
 export const CATALOG: Record<ProviderId, Record<ModelTier, string[]>> = {
-  // OpenAI's Codex surface, reached with a subscription grant. Kept first
-  // because it is the user's primary credential when connected.
+  // One current flagship model for every workload. The tier remains part of
+  // the agent protocol, but provider selection is intentionally Codex-only.
   codex: {
-    reasoning: ["gpt-5.1-codex", "gpt-5.1", "gpt-5"],
-    coding: ["gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1"],
-    cheap: ["gpt-5.1-codex-mini", "gpt-5-mini"],
-  },
-  /**
-   * Pro models are deliberately absent from the free-tier lists: they carry no
-   * free quota at all and 429 immediately, so listing them only adds latency
-   * before the Flash model that was always going to serve the request. This was
-   * measured against a real key, not assumed.
-   */
-  google: {
-    // gemini-2.5-flash (and -lite) are retired - probed 2026-08-29 against a
-    // fresh key and both 404 with "no longer available to new users, use
-    // models/gemini-3.6-flash". Confirmed live and answering on that date.
-    reasoning: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest"],
-    coding: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest"],
-    cheap: ["gemini-3.1-flash-lite", "gemini-3.6-flash"],
-  },
-  groq: {
-    reasoning: ["moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile"],
-    coding: ["moonshotai/kimi-k2-instruct", "llama-3.3-70b-versatile"],
-    cheap: ["llama-3.1-8b-instant"],
-  },
-  cerebras: {
-    reasoning: ["qwen-3-235b-a22b-instruct-2507", "llama-3.3-70b"],
-    coding: ["qwen-3-coder-480b", "qwen-3-235b-a22b-instruct-2507"],
-    cheap: ["llama3.1-8b"],
+    reasoning: ["gpt-5.6-sol"],
+    coding: ["gpt-5.6-sol"],
+    cheap: ["gpt-5.6-sol"],
   },
 };
 
-/** Provider order when several are configured. Codex first, then free tiers. */
-export const PROVIDER_ORDER: ProviderId[] = ["codex", "google", "groq", "cerebras"];
+/** Runtime provider policy: subscription-backed Codex only. */
+export const PROVIDER_ORDER: ProviderId[] = ["codex"];
 
 /**
- * Per-tier override, e.g. KAPI_MODELS_CODING="gemini-2.5-flash,llama-3.3-70b".
- *
- * Lets a run be pinned to models still known to have quota instead of
- * rediscovering exhaustion one wasted request at a time.
+ * Per-tier override. Only models explicitly present in the Codex catalog are
+ * accepted, so an environment variable cannot re-enable another provider.
  */
 export function envModels(tier: ModelTier): string[] | null {
   const raw = process.env[`KAPI_MODELS_${tier.toUpperCase()}`];

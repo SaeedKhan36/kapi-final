@@ -8,8 +8,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ModelResponse, WireMessage } from "@kapi/protocol";
 import {
-  BUILD_TOOLS, compact, editFileTool, gitCommitTool, grepTool, listFiles,
-  prepareRepo, readFileTool, runLoop, runTestsTool, writeFileTool,
+  BUILD_TOOLS, REVIEW_TOOLS, compact, editFileTool, gitCommitTool, grepTool,
+  inspectDiffTool, listFiles, prepareRepo, readFileTool, runLoop, runTestsTool,
+  submitVerdictTool, verdictFromOutcome, writeFileTool,
   detectTestCommand, shell, type ToolContext,
 } from "@kapi/agent-core";
 import { assert, equal, group, report, test } from "./harness.ts";
@@ -376,6 +377,83 @@ await test("checkpoints are written each step and can resume the loop", async ()
   // The whole point: it did not start over.
   const transcript = JSON.stringify(resumed.seen[0]);
   assert(transcript.includes("src/app.js"), "the resumed model saw the earlier work");
+});
+
+/* ------------------------------------------------------------------ */
+
+group("review agent tools");
+
+await test("the review toolset cannot edit, commit, push, or run arbitrary commands", () => {
+  const names = REVIEW_TOOLS.map((tool) => tool.name);
+  assert(names.includes("inspect_diff") && names.includes("submit_verdict"), "review primitives present");
+  for (const unsafe of ["write_file", "edit_file", "run_command", "git_commit", "git_push", "open_pr"]) {
+    assert(!names.includes(unsafe), `${unsafe} is not available to a reviewer`);
+  }
+  equal(submitVerdictTool.terminal, true, "the structured verdict ends the loop");
+});
+
+await test("submit_verdict reconciles an approve that contains a blocker", async () => {
+  const result = await submitVerdictTool.run({
+    decision: "approve",
+    summary: "looks good except for an authorization bypass",
+    findings: [{
+      severity: "blocker",
+      file: "src/auth.ts",
+      issue: "the route accepts an unauthenticated caller",
+      suggestion: "require the verified principal before dispatch",
+    }],
+    acceptance_met: [false],
+  }, ctx);
+  assert(result.ok !== false, `verdict accepted: ${result.output}`);
+  const verdict = verdictFromOutcome(result.meta);
+  equal(verdict?.decision, "request_changes", "blocking evidence overrides approve");
+  equal(verdict?.acceptanceMet[0], false, "acceptance evidence is preserved");
+});
+
+await test("a blocking finding without a fix is refused before the loop can end", async () => {
+  const result = await submitVerdictTool.run({
+    decision: "request_changes",
+    summary: "a crash remains",
+    findings: [{ severity: "major", issue: "null input throws" }],
+    acceptance_met: [false],
+  }, ctx);
+  equal(result.ok, false, "not terminally accepted");
+  assert(result.output.includes("suggested fix"), `actionable error: ${result.output}`);
+});
+
+await test("inspect_diff shows candidate changes without giving the reviewer git shell access", async () => {
+  const dir = await scratchRepo();
+  const remote = await mkdtemp(join(tmpdir(), "kapi-review-remote-"));
+  await run("git", ["init", "--bare", "-q"], { cwd: remote });
+  await run("git", ["remote", "add", "origin", remote], { cwd: dir });
+  await run("git", ["push", "-q", "-u", "origin", "main"], { cwd: dir });
+  await run("git", ["checkout", "-qb", "kapi/candidate"], { cwd: dir });
+  await writeFile(join(dir, "src", "app.js"), "export const reviewed = true;\n");
+  await run("git", ["add", "src/app.js"], { cwd: dir });
+  await run("git", ["commit", "-qm", "candidate change"], { cwd: dir });
+
+  const result = await inspectDiffTool.run({ base_branch: "main" }, ctxFor(dir));
+  assert(result.ok !== false, `diff read: ${result.output.slice(0, 160)}`);
+  assert(result.output.includes("candidate change"), "commit list is visible");
+  assert(result.output.includes("reviewed = true"), "the actual patch is visible");
+});
+
+await test("the loop returns the terminal verdict as structured metadata", async () => {
+  const dir = await scratchRepo();
+  const model = scriptedModel([{ tool: "submit_verdict", input: {
+    decision: "request_changes",
+    summary: "one correctness problem",
+    findings: [{
+      severity: "major", issue: "empty input crashes", suggestion: "handle the empty case",
+    }],
+    acceptance_met: [false],
+  } }]);
+  const outcome = await runLoop({
+    system: "review", brief: "review it", tools: REVIEW_TOOLS,
+    ctx: ctxFor(dir), callModel: model.call,
+  });
+  assert(outcome.ok, "submit_verdict completed the review loop");
+  equal(verdictFromOutcome(outcome.terminalMeta)?.decision, "request_changes", "structured result returned");
 });
 
 report();

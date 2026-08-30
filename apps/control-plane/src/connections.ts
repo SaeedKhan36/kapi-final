@@ -48,10 +48,6 @@ export function createConnectionRoutes(deps: { handle: DbHandle }) {
 
   /**
    * Starts the Codex sign-in.
-   *
-   * This is an undocumented OpenAI surface, so the route says so: a caller that
-   * gets a 502 here should understand it as "this may have changed", not as a
-   * bug in kapi. Key-based providers keep working regardless.
    */
   app.post("/api/connections/codex/start", async (c) => {
     sweep();
@@ -87,8 +83,7 @@ export function createConnectionRoutes(deps: { handle: DbHandle }) {
       return c.json(
         {
           error: err instanceof Error ? err.message : String(err),
-          hint: "Codex sign-in is an undocumented OpenAI surface and can change. " +
-                "API-key providers are unaffected.",
+          hint: "Codex sign-in failed. Retry the connection or sign in to ChatGPT again.",
         },
         502,
       );

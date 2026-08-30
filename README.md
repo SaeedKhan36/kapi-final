@@ -42,14 +42,16 @@ The Captain's checkout is deliberately **read-only** — no editor tools, no bra
 that can write code stops delegating, and the fleet collapses back into one agent, which is
 the exact failure this architecture exists to avoid.
 
-The **Review** role is still the Phase 2 echo handler; its loop is Phase 7.
+The **Review** role independently inspects a candidate diff with read-only tools and ends
+with a structured verdict. A `request_changes` result returns to the Captain as evidence;
+only the Captain decides whether to spawn a fixer or request another review.
 
 | Package | What it is |
 |---|---|
 | `apps/control-plane` | Hono HTTP + websocket API, auth, event stream, reaper, provisioner |
 | `apps/agent` | the in-VM binary — one bundled file, claims a job and dials home |
-| `packages/agent-core` | the turn loop, its tools, and the Build **and Captain** roles |
-| `packages/llm` | model routing on the Vercel AI SDK: keys, failover, rotation, budgets |
+| `packages/agent-core` | the turn loop, tools, and Build, Captain, and Review roles |
+| `packages/llm` | Codex subscription routing on the Vercel AI SDK: OAuth and budgets |
 | `packages/vm` | `VmProvider`: local, docker, daytona |
 | `packages/protocol` | zod wire types — jobs, events, addressing, agent + model API, verdicts |
 | `packages/db` | Drizzle schema, dual Postgres/PGlite bootstrap, idempotent DDL |
@@ -112,6 +114,7 @@ curl -XPOST localhost:8787/api/threads/$TID/messages -H 'content-type: applicati
 | `GET /api/runs/:id/events?after=` | events after a sequence number |
 | `POST /api/runs/:id/cancel` | cancel the captain and everything it spawned |
 | `PUT·GET·DELETE /api/secrets` | vault — values go in, only names come back |
+| `POST /webhooks/github` | GitHub `check_run` / `check_suite` completions |
 | `WS /ws?runId=&cursor=` | live event stream, resumable from a cursor |
 
 ### The agent surface
@@ -139,6 +142,30 @@ Identity comes from the token, never the body: `runId`, `jobId` and the `from` a
 all taken from the verified token, so a compromised VM cannot write into another run's
 stream or complete a job that is not its own. Tokens are HMAC-signed under a key *derived*
 from `KAPI_SECRET_KEY`, name exactly one job, and expire.
+
+### GitHub App and CI
+
+Set `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` and install the App on each project
+repository with **Contents: read and write** permission. Git operations receive a one-hour
+installation token narrowed to that repository; the control plane no longer reads or hands
+out a raw `GITHUB_TOKEN`.
+
+Point the App's webhook URL at `POST /webhooks/github` and subscribe to **Check run** and
+**Check suite**. Completed checks are correlated by the `kapi/<jobId>` branch, appended as
+`ci.completed`, streamed to browsers, and delivered to the root captain's inbox. Set
+`GITHUB_WEBHOOK_SECRET` to make the route require GitHub's HMAC signature.
+
+### Review and fix loop
+
+A review agent receives either `context.branch` or exactly one build dependency, from which
+it infers `kapi/<jobId>`. Its toolset can inspect the diff and files and run the detected test
+suite, but cannot edit, invoke arbitrary shell commands, commit, push, or open a PR. Its only
+terminal is `submit_verdict`.
+
+Verdicts are normalized against their findings, persisted as `review.verdict` artifacts,
+and appended to the run stream. `wait_for_agents` returns the structured findings to the
+Captain. Nothing automatically creates a fixer: the Captain may spawn one with the exact
+blocking evidence and branch context, or decide that another action is more appropriate.
 
 ### VMs
 
@@ -206,40 +233,12 @@ is a deadlocked run.
 ## Models
 
 Built on the Vercel AI SDK, so **native tool calling** replaces the JSON-action-batch parsing
-the old build needed. Providers: Codex (subscription OAuth), Google, Groq, Cerebras.
+the old build needed. All calls use the connected user's **Codex subscription** and the
+`gpt-5.6-sol` model. Gemini, Groq, Cerebras, Grok, and provider API keys are not routing
+candidates, even if corresponding environment variables are present.
 
-### Where a key comes from
-
-Resolution is **task → project → user → platform**, narrowest first. That is the whole
-mechanism behind per-task BYO keys: attaching a key to one job makes that job, and only that
-job, run on it. Platform env keys come last on purpose — they are the operator's own quota,
-so anything a user supplied is spent before it.
-
-### Failover, and why there are two kinds
-
-Two failure shapes need different answers, and conflating them is expensive:
-
-- **The provider is down, or the key is bad** → try the next *provider*. One 401 condemns
-  the whole provider, because every model behind that key will fail identically.
-- **One model is out of quota** → try a *sibling model on the same provider*.
-
-The second is what makes the free tiers usable. Google's free tier caps requests per model
-per day (20 on a key we measured), not per project, so pinning every call to the best model
-spends a twentieth of the day's capacity per request while its siblings sit idle. Rotating
-across them multiplies usable quota by the number of models.
-
-A `fatal` failure — a malformed request — stops immediately rather than failing over: it
-would repeat identically on every model, so retrying just spends the whole candidate list
-making the same mistake.
-
-```bash
-pnpm probe:models        # ask each configured key which of its models actually answer
-```
-
-Worth running against a new key. Availability varies per key and project, names in the
-public docs can 404, and this is how the old build learned its free tier had no Pro models at
-all. A probe on 2026-08-29 found `gemini-2.5-flash-lite` retired; it was removed from the
-catalog on that evidence rather than left in on faith.
+A malformed request stops immediately. A rejected or expired Codex grant is surfaced as a
+connection error so the user can sign in again; it never falls through to another provider.
 
 ### Budgets
 
@@ -254,9 +253,8 @@ after, because the point is not to make the request that crosses the line.
 refreshable grant in the same AES-256-GCM envelope as every other secret, and short-lived
 access tokens are minted from it per job.
 
-**This is an undocumented OpenAI surface.** It can change or disappear without notice, so
-nothing depends on it: it is one entry in the router's candidate list, and when it fails the
-key-based providers take over silently. The tests assert exactly that.
+This is the only model credential accepted by the router. OpenAI API keys are intentionally
+not used because they are usage-billed separately from a ChatGPT/Codex subscription.
 
 > **Daytona needs a reachable control plane.** A cloud VM cannot dial `localhost`. Expose the
 > plane through a tunnel and set `CONTROL_PLANE_PUBLIC_URL`; the provisioner refuses to start
@@ -275,9 +273,9 @@ Encrypted with AES-256-GCM under `KAPI_SECRET_KEY`. There is no route and no fun
 returns a stored value to a caller — listings return names and scopes only. The single
 egress is `resolve()`, which the plane will call to inject credentials into a VM.
 
-Scope precedence is **task → project → user**, narrowest first. That is what makes per-task
-BYO API keys work: a key attached to one task overrides the project's, which overrides the
-user's.
+Scope precedence is **task → project → user**, narrowest first. This remains available for
+non-model integrations such as source control; model credentials bypass this vault and come
+only from the user's Codex connection.
 
 ## The two mechanisms
 
@@ -322,7 +320,6 @@ pnpm typecheck
 pnpm dev:api        # builds the agent bundle, then runs the plane in watch mode
 pnpm build:agent    # bundle apps/agent to a single dist/agent.mjs
 pnpm probe:daytona  # create one real Daytona VM, exercise it, destroy it
-pnpm probe:models   # check which models each configured key can actually reach
 pnpm db:reset       # wipe every table (--force required against real Postgres)
 
 # drive a real run end to end - a Build agent, or a Captain that delegates
@@ -351,8 +348,8 @@ Requires Node 22+ and pnpm 10.
 3. ~~Models on the Vercel AI SDK~~ — done
 4. ~~`agent-core` loop + the Build agent~~ — done
 5. ~~Captain AI~~ — unbounded spawn, monitor, triage — done
-6. GitHub App + CI check-runs
-7. Review agent + the fail → fix → re-review → merge loop
+6. ~~GitHub App + CI check-runs~~ — repo-scoped installation tokens + streamed check results — done
+7. ~~Review agent + adaptive fail → fix loop~~ — structured verdicts, captain-directed fixes — done
 8. Web UI — thread-based chat with the Captain, live agent tree
 9. Scheduler, orphan-VM reaping, cost accounting
 # kapi-final

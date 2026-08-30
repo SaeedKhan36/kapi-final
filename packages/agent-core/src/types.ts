@@ -82,4 +82,6 @@ export type LoopOutcome = {
   commits: string[];
   branch?: string;
   prUrl?: string;
+  /** Structured output from the successful terminal tool, e.g. a review verdict. */
+  terminalMeta?: Record<string, unknown>;
 };

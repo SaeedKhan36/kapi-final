@@ -1,20 +1,19 @@
 /**
  * Which class of model a call wants.
  *
- * A tier, not a model name: the same run may end up on Gemini, Groq or Cerebras
- * depending on which keys exist and which still have quota, and callers must
- * not care.
+ * A tier, not a model name: callers express the workload shape while the
+ * Codex catalog chooses the subscription model.
  */
 export type ModelTier = "reasoning" | "coding" | "cheap";
 
-export type ProviderId = "codex" | "google" | "groq" | "cerebras";
+export type ProviderId = "codex";
 
 /** One concrete (provider, model) pair the router may try. */
 export type Candidate = {
   provider: ProviderId;
   modelId: string;
   /** Where the credential came from. Reported so a run can be traced to a key. */
-  keySource: "task" | "project" | "user" | "platform" | "oauth";
+  keySource: "oauth";
 };
 
 export type Usage = { inputTokens: number; outputTokens: number; requests: number };

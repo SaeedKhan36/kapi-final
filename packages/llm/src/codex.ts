@@ -6,11 +6,9 @@ import { newId } from "@kapi/protocol";
 /**
  * Signing in with a ChatGPT/Codex subscription instead of pasting an API key.
  *
- * This is an UNDOCUMENTED surface. OpenAI can change or withdraw it without
- * notice, so nothing here is load-bearing: it is one entry in the router's
- * candidate list, and when it fails the key-based providers take over silently.
- * Everything below is written to fail in a way the router can classify rather
- * than in a way that ends a run.
+ * Codex supports ChatGPT sign-in for subscription access. This service keeps a
+ * refreshable grant per user and deliberately has no API-key fallback: a
+ * rejected or expired grant must be surfaced so the user can reconnect it.
  */
 
 const AUTH_BASE = process.env.KAPI_CODEX_AUTH_URL ?? "https://auth.openai.com";
@@ -33,6 +31,16 @@ export type CodexGrant = {
   expiresAt: number;
   accountId?: string;
 };
+
+export type CodexCredential = Pick<CodexGrant, "accessToken" | "accountId">;
+
+/** Headers required by the subscription-backed Codex endpoint. */
+export function codexHeaders(accountId?: string | null): Record<string, string> {
+  return {
+    originator: "codex_cli_rs",
+    ...(accountId ? { "chatgpt-account-id": accountId } : {}),
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /* PKCE                                                                */
@@ -178,13 +186,15 @@ export async function markGrantRevoked(handle: DbHandle, userId: string): Promis
  * with fifty seconds left on the token would otherwise fail mid-call for a
  * reason that has nothing to do with the work.
  */
-export async function accessTokenFor(
+export async function credentialFor(
   handle: DbHandle, userId: string,
-): Promise<string | null> {
+): Promise<CodexCredential | null> {
   const grant = await loadGrant(handle, userId);
   if (!grant) return null;
 
-  if (grant.expiresAt - Date.now() > 60_000) return grant.accessToken;
+  if (grant.expiresAt - Date.now() > 60_000) {
+    return { accessToken: grant.accessToken, accountId: grant.accountId };
+  }
   if (!grant.refreshToken) {
     await markGrantRevoked(handle, userId);
     return null;
@@ -199,7 +209,7 @@ export async function accessTokenFor(
       accountId: refreshed.accountId ?? grant.accountId,
     };
     await saveGrant(handle, userId, merged);
-    return merged.accessToken;
+    return { accessToken: merged.accessToken, accountId: merged.accountId };
   } catch (err) {
     // A refresh that fails for a non-transient reason means the user revoked
     // access. Marking it so stops every later job retrying a dead grant.
@@ -208,6 +218,11 @@ export async function accessTokenFor(
     }
     return null;
   }
+}
+
+/** Backward-compatible token-only view for callers that do not make model requests. */
+export async function accessTokenFor(handle: DbHandle, userId: string): Promise<string | null> {
+  return (await credentialFor(handle, userId))?.accessToken ?? null;
 }
 
 export const codexApiBase = () => API_BASE;

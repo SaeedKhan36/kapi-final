@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentRoleSchema, type AgentRole } from "./ids.ts";
+import { ReviewVerdictSchema } from "./review.ts";
 
 /**
  * What kind of agent a job runs.
@@ -62,6 +63,8 @@ export const JobResultSchema = z.object({
   commits: z.array(z.string()).default([]),
   branch: z.string().optional(),
   prUrl: z.string().optional(),
+  /** Present for review jobs. A request_changes verdict is still a successful job result. */
+  review: ReviewVerdictSchema.optional(),
   error: z.string().optional(),
 });
 export type JobResult = z.infer<typeof JobResultSchema>;

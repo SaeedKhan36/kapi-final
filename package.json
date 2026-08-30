@@ -16,7 +16,6 @@
     "dev:api": "pnpm build:agent && pnpm --filter @kapi/control-plane dev",
     "build:agent": "pnpm --filter @kapi/agent build",
     "probe:daytona": "tsx scripts/probe-daytona.ts",
-    "probe:models": "tsx scripts/probe-models.ts",
     "run:agent": "pnpm build:agent && tsx scripts/run-agent.ts"
   },
   "devDependencies": {

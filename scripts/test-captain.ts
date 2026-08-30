@@ -418,6 +418,77 @@ await test("a captain cannot cancel an agent that is not its own", async () => {
 
 group("the captain adapts to what comes back");
 
+await test("request_changes returns as evidence and only the captain starts a fixer", async () => {
+  const cap = await captainOnRun({ maxTotalSpawns: 20 });
+  await spawnAgentsTool.run({ agents: [{
+    kind: "review", role: "review", instruction: "review the candidate",
+    branch: "kapi/candidate", acceptance: ["authorization is enforced"],
+  }] }, cap.ctx);
+
+  const review = (await listJobs(handle, cap.seeded.runId))
+    .find((job) => job.parentJobId === cap.job.id && job.kind === "review")!;
+  const vmId = "review-vm";
+  await claim(handle, { vmId, jobId: review.id, runId: cap.seeded.runId });
+  const token = mintJobToken({ jobId: review.id, runId: cap.seeded.runId, vmId });
+  const completed = await fetch(`${base}/agent/complete`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ result: {
+      ok: true,
+      summary: "review submitted",
+      filesChanged: [],
+      commits: [],
+      branch: "kapi/candidate",
+      review: {
+        // The plane must reconcile this inconsistent model output.
+        decision: "approve",
+        summary: "authorization is not enforced",
+        findings: [{
+          severity: "blocker",
+          file: "src/auth.ts",
+          issue: "the endpoint accepts anonymous requests",
+          suggestion: "require the authenticated principal",
+        }],
+        acceptanceMet: [false],
+      },
+    } }),
+  });
+  equal(completed.status, 200, "the review completed successfully");
+
+  const snapshot = await waitForAgentsTool.run({ timeout_seconds: 0 }, cap.ctx);
+  assert(snapshot.output.includes("review: request_changes"), `decision returned: ${snapshot.output}`);
+  assert(snapshot.output.includes("accepts anonymous requests"), "blocking evidence returned to captain");
+
+  const afterReview = await listJobs(handle, cap.seeded.runId);
+  equal(
+    afterReview.filter((job) => job.parentJobId === cap.job.id).length,
+    1,
+    "no fixer was spawned automatically",
+  );
+  equal((await getJob(handle, review.id))?.result?.review?.decision, "request_changes",
+    "the normalized verdict is stored on the job");
+
+  const events = await store.listEvents(cap.seeded.runId, 0);
+  assert(events.some((event) => event.kind === "review.verdict"), "verdict appended to the run stream");
+  const artifacts = await handle.raw<{ kind: string }>(
+    `SELECT kind FROM artifacts WHERE job_id = $1`, [review.id],
+  );
+  assert(artifacts.some((artifact) => artifact.kind === "review.verdict"), "verdict persisted as an artifact");
+
+  // This second spawn is an explicit captain action after reading the tool
+  // result—the cycle is adaptive, not encoded in the control plane.
+  await spawnAgentsTool.run({ agents: [{
+    kind: "build", role: "backend",
+    instruction: "require the authenticated principal in src/auth.ts",
+    acceptance: ["anonymous requests are rejected"],
+    base_branch: "kapi/candidate",
+    priority: 20,
+  }] }, cap.ctx);
+  const jobs = await listJobs(handle, cap.seeded.runId);
+  assert(jobs.some((job) => job.kind === "build" && job.payload.instruction.includes("authenticated principal")),
+    "the captain chose to start a focused fixer");
+});
+
 await test("the captain spawns AGAIN after seeing a result", async () => {
   /*
    * The assertion this whole rebuild turns on.
