@@ -1,4 +1,4 @@
-import type { DbHandle } from "@kapi/db";
+import type { DbHandle, SqlRunner } from "@kapi/db";
 import {
   JobSpecSchema, newId, type Job, type JobResult, type JobSpec,
 } from "@kapi/protocol";
@@ -30,11 +30,15 @@ async function retryOnClosed<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Adds a job. This is what a captain's `spawn_agents` tool ultimately calls. */
 export async function enqueue(handle: DbHandle, spec: JobSpec): Promise<Job> {
+  return handle.transaction((tx) => enqueueIn(tx, spec));
+}
+
+/** Transactional form used when opening a run and its root job atomically. */
+export async function enqueueIn(tx: SqlRunner, spec: JobSpec): Promise<Job> {
   const s = JobSpecSchema.parse(spec);
   const id = newId("job");
 
-  return handle.transaction(async (tx) => {
-    const rows = await tx<JobRow>(
+  const rows = await tx<JobRow>(
       `INSERT INTO jobs
          (id, run_id, parent_job_id, kind, role, status, payload,
           max_attempts, priority, depends_on)
@@ -55,11 +59,10 @@ export async function enqueue(handle: DbHandle, spec: JobSpec): Promise<Job> {
       ],
     );
 
-    const job = toJob(rows[0]!);
-    await appendEvent(tx, jobStatusEvent({ runId: job.runId, jobId: job.id, to: "queued" }));
-    await tx(`UPDATE runs SET total_spawns = total_spawns + 1 WHERE id = $1`, [job.runId]);
-    return job;
-  });
+  const job = toJob(rows[0]!);
+  await appendEvent(tx, jobStatusEvent({ runId: job.runId, jobId: job.id, to: "queued" }));
+  await tx(`UPDATE runs SET total_spawns = total_spawns + 1 WHERE id = $1`, [job.runId]);
+  return job;
 }
 
 /**

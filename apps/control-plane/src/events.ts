@@ -26,12 +26,33 @@ export class EventHub {
   #clients = new Map<string, Client>();
   #cursors = new Map<string, number>();
   #timer: ReturnType<typeof setInterval> | null = null;
+  #notificationStop: (() => Promise<void>) | null = null;
+  #notificationReady: Promise<void>;
+  #closed = false;
+  #pending = new Set<Promise<unknown>>();
 
   constructor(
     private store: Store,
     private handle: DbHandle,
     private pollMs = Number(process.env.KAPI_EVENT_POLL_MS ?? 1000),
-  ) {}
+  ) {
+    const listen = this.handle.listen?.(
+      "kapi_events",
+      (payload) => this.#track(this.#notified(payload)),
+    );
+    // LISTEN establishes a dedicated connection asynchronously. Keep that
+    // setup promise in the shutdown barrier as well as the notification work:
+    // otherwise a fast test/process shutdown can close the pool while LISTEN
+    // is still being written, surfacing a spurious CONNECTION_ENDED rejection.
+    this.#notificationReady = listen
+      ? listen
+          .then(async (stop) => {
+            if (this.#closed) await stop();
+            else this.#notificationStop = stop;
+          })
+          .catch(() => {})
+      : Promise.resolve();
+  }
 
   get clientCount() { return this.#clients.size; }
 
@@ -60,8 +81,20 @@ export class EventHub {
 
   /** Immediate delivery for an event this process just committed. */
   publish(event: EventRow): void {
+    if (event.seq <= (this.#cursors.get(event.runId) ?? 0)) return;
     this.#cursors.set(event.runId, Math.max(this.#cursors.get(event.runId) ?? 0, event.seq));
     this.#fanOut(event);
+  }
+
+  async #notified(payload: string) {
+    if (this.#closed) return;
+    try {
+      const parsed = JSON.parse(payload) as { runId?: string; seq?: number };
+      if (!parsed.runId || !Number.isFinite(parsed.seq)) return;
+      if ((parsed.seq ?? 0) <= (this.#cursors.get(parsed.runId) ?? 0)) return;
+      const rows = await this.store.listEvents(parsed.runId, (parsed.seq ?? 1) - 1, 1);
+      if (rows[0]) this.publish(rows[0]);
+    } catch { /* polling remains the recovery path */ }
   }
 
   #fanOut(event: EventRow) {
@@ -75,7 +108,7 @@ export class EventHub {
 
   #ensurePolling() {
     if (this.#timer) return;
-    this.#timer = setInterval(() => void this.#tick(), this.pollMs);
+    this.#timer = setInterval(() => this.#track(this.#tick()), this.pollMs);
     this.#timer.unref?.();
   }
 
@@ -123,8 +156,18 @@ export class EventHub {
     return [...explicit];
   }
 
-  close() {
+  async close() {
+    this.#closed = true;
     this.#stopPolling();
     this.#clients.clear();
+    await this.#notificationReady;
+    await this.#notificationStop?.().catch(() => {});
+    this.#notificationStop = null;
+    await Promise.allSettled([...this.#pending]);
+  }
+
+  #track(promise: Promise<unknown>) {
+    this.#pending.add(promise);
+    void promise.finally(() => this.#pending.delete(promise)).catch(() => {});
   }
 }

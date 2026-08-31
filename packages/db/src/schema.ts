@@ -1,5 +1,5 @@
 import {
-  pgTable, text, timestamp, integer, boolean, jsonb, index, uniqueIndex,
+  pgTable, text, timestamp, integer, bigint, boolean, jsonb, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { JobPayload, JobResult, ReviewVerdict } from "@kapi/protocol";
 
@@ -82,13 +82,21 @@ export const runs = pgTable(
     maxTotalSpawns: integer("max_total_spawns").notNull().default(200),
     maxSpawnDepth: integer("max_spawn_depth").notNull().default(4),
     maxTokens: integer("max_tokens").notNull().default(20_000_000),
+    maxLlmRequests: integer("max_llm_requests").notNull().default(1_000),
+    maxVmSeconds: integer("max_vm_seconds").notNull().default(86_400),
     maxUsdCents: integer("max_usd_cents").notNull().default(2_000),
 
     llmRequests: integer("llm_requests").notNull().default(0),
     llmTokens: integer("llm_tokens").notNull().default(0),
     usdCents: integer("usd_cents").notNull().default(0),
+    usdMicros: bigint("usd_micros", { mode: "number" }).notNull().default(0),
+    costStatus: text("cost_status").notNull().default("unavailable"),
     totalSpawns: integer("total_spawns").notNull().default(0),
     vmSeconds: integer("vm_seconds").notNull().default(0),
+
+    /** Scheduling provenance. Null for interactive runs. */
+    scheduleId: text("schedule_id"),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }),
 
     /**
      * Monotonic event counter for this run, bumped in the same transaction as
@@ -102,7 +110,10 @@ export const runs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
-  (t) => [index("runs_thread_idx").on(t.threadId, t.createdAt)],
+  (t) => [
+    index("runs_thread_idx").on(t.threadId, t.createdAt),
+    uniqueIndex("runs_schedule_occurrence_idx").on(t.scheduleId, t.scheduledFor),
+  ],
 );
 
 /* ------------------------------------------------------------------ */
@@ -166,11 +177,13 @@ export const agents = pgTable(
     role: text("role").notNull(),
     status: text("status").notNull().default("starting"),
     vmId: text("vm_id"),
+    provider: text("provider"),
     /** How deep in the spawn tree. Enforces maxSpawnDepth without recursing. */
     depth: integer("depth").notNull().default(0),
     lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+    accountedThrough: timestamp("accounted_through", { withTimezone: true }),
   },
   (t) => [index("agents_run_idx").on(t.runId, t.status)],
 );
@@ -262,12 +275,46 @@ export const schedules = pgTable(
   {
     id: text("id").primaryKey(),
     projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").notNull().references(() => threads.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
     cron: text("cron").notNull(),
+    timezone: text("timezone").notNull().default("UTC"),
     goal: text("goal").notNull(),
     enabled: boolean("enabled").notNull().default(true),
     lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    lastScheduledAt: timestamp("last_scheduled_at", { withTimezone: true }),
+    lastSkippedAt: timestamp("last_skipped_at", { withTimezone: true }),
+    lastStatus: text("last_status"),
+    lastError: text("last_error"),
     nextRunAt: timestamp("next_run_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
-  (t) => [index("schedules_next_idx").on(t.enabled, t.nextRunAt)],
+  (t) => [
+    index("schedules_next_idx").on(t.enabled, t.nextRunAt),
+    uniqueIndex("schedules_thread_idx").on(t.threadId),
+  ],
+);
+
+/** Append-only audit trail. Aggregate counters on runs are maintained in the same transaction. */
+export const usageLedger = pgTable(
+  "usage_ledger",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    jobId: text("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    provider: text("provider").notNull(),
+    kind: text("kind").notNull(),
+    quantity: integer("quantity").notNull(),
+    usdMicros: bigint("usd_micros", { mode: "number" }).notNull().default(0),
+    costStatus: text("cost_status").notNull().default("unavailable"),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("usage_ledger_job_period_idx").on(t.jobId, t.kind, t.periodEnd),
+    index("usage_ledger_run_idx").on(t.runId, t.createdAt),
+  ],
 );

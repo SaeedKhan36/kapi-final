@@ -60,7 +60,9 @@ export async function reap(handle: DbHandle, limit = 100): Promise<Job[]> {
 /** Runs `reap` on an interval. Returns a stop function. */
 export function startReaper(
   handle: DbHandle,
-  opts: { intervalMs?: number; onReap?: (jobs: Job[]) => void } = {},
+  // The hook may be async: the control plane uses it to finish a run whose root
+  // captain was just dead-lettered, which is several statements against the DB.
+  opts: { intervalMs?: number; onReap?: (jobs: Job[]) => void | Promise<void> } = {},
 ): () => void {
   const interval = opts.intervalMs ?? 15_000;
   let stopped = false;
@@ -69,7 +71,10 @@ export function startReaper(
     if (stopped) return;
     try {
       const jobs = await reap(handle);
-      if (jobs.length > 0) opts.onReap?.(jobs);
+      // Awaited so a slow hook delays the next tick rather than racing it on
+      // the same run. Still inside the try below - a throwing hook is a reap
+      // that failed, not a process that dies.
+      if (jobs.length > 0) await opts.onReap?.(jobs);
     } catch {
       // A reap failure is transient by nature - the next tick retries, and
       // throwing here would take down whatever process hosts the reaper.

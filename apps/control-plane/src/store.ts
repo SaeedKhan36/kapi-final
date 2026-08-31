@@ -1,4 +1,4 @@
-import type { DbHandle } from "@kapi/db";
+import type { DbHandle, SqlRunner } from "@kapi/db";
 import { newId, type Job } from "@kapi/protocol";
 import { listJobs } from "@kapi/queue";
 
@@ -14,15 +14,24 @@ export type Message = {
 export type Run = {
   id: string; threadId: string; projectId: string; goal: string; status: string;
   maxConcurrentVms: number; maxTotalSpawns: number; maxSpawnDepth: number;
-  maxTokens: number; maxUsdCents: number;
+  maxTokens: number; maxLlmRequests: number; maxVmSeconds: number; maxUsdCents: number;
   llmRequests: number; llmTokens: number; usdCents: number;
+  usdMicros: number; costStatus: "known" | "partial" | "unavailable";
   totalSpawns: number; vmSeconds: number; eventSeq: number;
+  scheduleId: string | null; scheduledFor: Date | null;
   error: string | null; createdAt: Date; finishedAt: Date | null;
 };
 export type EventRow = {
   id: string; runId: string; jobId: string | null; seq: number;
   kind: string; from: string; to: string | null;
   payload: Record<string, unknown>; ts: Date;
+};
+
+export type MessageInput = {
+  threadId: string;
+  role: "user" | "captain" | "system";
+  content: string;
+  runId?: string | null;
 };
 
 const d = (v: string | Date | null): Date | null => (v == null ? null : v instanceof Date ? v : new Date(v));
@@ -68,10 +77,21 @@ export class Store {
     return rows[0] ? this.#project(rows[0]) : null;
   }
 
+  async getProjectById(id: string): Promise<Project | null> {
+    const rows = await this.h.raw<Record<string, unknown>>(
+      `SELECT * FROM projects WHERE id = $1`, [id],
+    );
+    return rows[0] ? this.#project(rows[0]) : null;
+  }
+
   /* ------------------------------------------------------------- threads */
 
   async createThread(projectId: string, title?: string): Promise<Thread> {
-    const rows = await this.h.raw<Record<string, unknown>>(
+    return this.createThreadIn(this.h.raw, projectId, title);
+  }
+
+  async createThreadIn(sql: SqlRunner, projectId: string, title?: string): Promise<Thread> {
+    const rows = await sql<Record<string, unknown>>(
       `INSERT INTO threads (id, project_id, title) VALUES ($1, $2, $3) RETURNING *`,
       [newId("thr"), projectId, title ?? null],
     );
@@ -111,10 +131,24 @@ export class Store {
 
   /* ------------------------------------------------------------ messages */
 
-  async createMessage(input: {
-    threadId: string; role: "user" | "captain" | "system"; content: string; runId?: string | null;
-  }): Promise<Message> {
-    const rows = await this.h.raw<Record<string, unknown>>(
+  async createMessage(input: MessageInput): Promise<Message> {
+    return this.#insertMessage(this.h.raw, input);
+  }
+
+  /**
+   * The same insert, inside a caller's transaction.
+   *
+   * A run that ends has to write three things at once - the run's status, the
+   * captain's closing turn, and the event announcing both. Committing the
+   * status without the turn leaves a finished run that never answered the
+   * person who started it, which is indistinguishable from a run still working.
+   */
+  async createMessageIn(tx: SqlRunner, input: MessageInput): Promise<Message> {
+    return this.#insertMessage(tx, input);
+  }
+
+  async #insertMessage(sql: SqlRunner, input: MessageInput): Promise<Message> {
+    const rows = await sql<Record<string, unknown>>(
       `INSERT INTO messages (id, thread_id, role, content, run_id)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [newId("msg"), input.threadId, input.role, input.content, input.runId ?? null],
@@ -133,20 +167,31 @@ export class Store {
 
   async createRun(input: {
     threadId: string; projectId: string; goal: string; budgets?: Record<string, number>;
+    scheduleId?: string | null; scheduledFor?: Date | null;
+  }): Promise<Run> {
+    return this.createRunIn(this.h.raw, input);
+  }
+
+  async createRunIn(sql: SqlRunner, input: {
+    threadId: string; projectId: string; goal: string; budgets?: Record<string, number>;
+    scheduleId?: string | null; scheduledFor?: Date | null;
   }): Promise<Run> {
     const b = input.budgets ?? {};
-    const rows = await this.h.raw<Record<string, unknown>>(
+    const rows = await sql<Record<string, unknown>>(
       `INSERT INTO runs (id, thread_id, project_id, goal, status,
                          max_concurrent_vms, max_total_spawns, max_spawn_depth,
-                         max_tokens, max_usd_cents)
+                         max_tokens, max_llm_requests, max_vm_seconds, max_usd_cents,
+                         schedule_id, scheduled_for)
        VALUES ($1, $2, $3, $4, 'queued',
                COALESCE($5, 12), COALESCE($6, 200), COALESCE($7, 4),
-               COALESCE($8, 20000000), COALESCE($9, 2000))
+               COALESCE($8, 20000000), COALESCE($9, 1000), COALESCE($10, 86400),
+               COALESCE($11, 2000), $12, $13)
        RETURNING *`,
       [
         newId("run"), input.threadId, input.projectId, input.goal,
         b.maxConcurrentVms ?? null, b.maxTotalSpawns ?? null, b.maxSpawnDepth ?? null,
-        b.maxTokens ?? null, b.maxUsdCents ?? null,
+        b.maxTokens ?? null, b.maxLlmRequests ?? null, b.maxVmSeconds ?? null,
+        b.maxUsdCents ?? null, input.scheduleId ?? null, input.scheduledFor?.toISOString() ?? null,
       ],
     );
     return this.#run(rows[0]!);
@@ -273,13 +318,19 @@ export class Store {
       maxTotalSpawns: n(r.max_total_spawns),
       maxSpawnDepth: n(r.max_spawn_depth),
       maxTokens: n(r.max_tokens),
+      maxLlmRequests: n(r.max_llm_requests),
+      maxVmSeconds: n(r.max_vm_seconds),
       maxUsdCents: n(r.max_usd_cents),
       llmRequests: n(r.llm_requests),
       llmTokens: n(r.llm_tokens),
       usdCents: n(r.usd_cents),
+      usdMicros: n(r.usd_micros),
+      costStatus: (r.cost_status as Run["costStatus"]) ?? "unavailable",
       totalSpawns: n(r.total_spawns),
       vmSeconds: n(r.vm_seconds),
       eventSeq: n(r.event_seq),
+      scheduleId: (r.schedule_id as string) ?? null,
+      scheduledFor: d(r.scheduled_for as string | null),
       error: (r.error as string) ?? null,
       createdAt: d(r.created_at as string)!,
       finishedAt: d(r.finished_at as string | null),

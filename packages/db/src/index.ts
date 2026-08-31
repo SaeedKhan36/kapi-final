@@ -2,10 +2,12 @@ import { mkdirSync } from "node:fs";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "./schema.ts";
 import { DDL, TABLES } from "./ddl.ts";
+import { runMigrations } from "./migrations.ts";
 
 export * as schema from "./schema.ts";
 export { schema as tables };
 export { DDL, TABLES } from "./ddl.ts";
+export { MIGRATIONS, runMigrations } from "./migrations.ts";
 
 /**
  * The Drizzle client.
@@ -34,6 +36,8 @@ export type DbHandle = {
   /** Multi-statement DDL. */
   exec: (sql: string) => Promise<void>;
   close: () => Promise<void>;
+  /** Postgres LISTEN/NOTIFY; absent for embedded PGlite. */
+  listen?: (channel: string, onMessage: (payload: string) => void) => Promise<() => Promise<void>>;
   target: string;
   /**
    * True for PGlite. Single-process, so transactions serialise and
@@ -89,10 +93,34 @@ export async function createDb(url = process.env.DATABASE_URL): Promise<DbHandle
       // `.simple()` is required: the extended protocol rejects multi-statement SQL.
       exec: async (sql: string) => { await client.unsafe(sql).simple(); },
       close: () => client.end({ timeout: 5 }),
+      listen: async (channel, onMessage) => {
+        const listener = await client.listen(channel, onMessage);
+        return async () => {
+          await listener.unlisten();
+          // postgres.js implements LISTEN on a private, dedicated one-client
+          // pool (`listen.sql`). Ending the main query pool does not end that
+          // socket, so explicitly close it during application shutdown.
+          const listenSql = (client.listen as typeof client.listen & {
+            sql?: { end: (options?: { timeout?: number }) => Promise<void> };
+          }).sql;
+          if (listenSql) await listenSql.end({ timeout: 5 });
+        };
+      },
       target: describeDbTarget(url),
       embedded: false,
     };
     await handle.exec(DDL);
+    await runMigrations(handle);
+    await handle.exec(`
+      CREATE OR REPLACE FUNCTION kapi_notify_event() RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_notify('kapi_events', json_build_object('runId', NEW.run_id, 'seq', NEW.seq)::text);
+        RETURN NEW;
+      END; $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS kapi_events_notify ON events;
+      CREATE TRIGGER kapi_events_notify AFTER INSERT ON events
+        FOR EACH ROW EXECUTE FUNCTION kapi_notify_event();
+    `);
     return handle;
   }
 
@@ -121,6 +149,7 @@ export async function createDb(url = process.env.DATABASE_URL): Promise<DbHandle
     embedded: true,
   };
   await handle.exec(DDL);
+  await runMigrations(handle);
   return handle;
 }
 

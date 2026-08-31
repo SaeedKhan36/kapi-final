@@ -7,13 +7,13 @@ moment — each on its own VM, on its own branch, behind a pull request.
 ```
         USER
           │
-   CONTROL PLANE          auth · projects · threads · runs · secrets · scheduler
+   CONTROL PLANE          auth · projects · threads · runs · secrets
           │
    POSTGRES / QUEUE       jobs · events · agent state
       ╱        ╲          HTTPS · VMs pull, nothing pushes
  MASTER VM   WORKER VM…
  Captain AI   Build AI  ─→ PR ─→ CI ─→ REVIEW VM ─→ verdict ─→ Captain
-                                                      pass → merge
+                                                      pass → a human merges
                                                       fail → respawn a fixer
 ```
 
@@ -22,7 +22,7 @@ frozen DAG: it decides what to spawn after seeing what came back. The only limit
 budgets, and a budget being reached is reported to the Captain as a tool result for it to
 reason about — never as a killed run.
 
-## Status: Phase 5 — the Captain
+## Status: Phases 1–10 complete
 
 The Captain is a live agent, not a plan. It explores a repository, then delegates by calling
 **`spawn_agents`** with as many workers as the work needs — no fixed count, no fixed order.
@@ -48,7 +48,7 @@ only the Captain decides whether to spawn a fixer or request another review.
 
 | Package | What it is |
 |---|---|
-| `apps/control-plane` | Hono HTTP + websocket API, auth, event stream, reaper, provisioner |
+| `apps/control-plane` | Hono API, AuthKit sessions, websocket stream, scheduler, accounting, reaper, reconciler |
 | `apps/agent` | the in-VM binary — one bundled file, claims a job and dials home |
 | `apps/web` | the browser UI — thread chat, and the fleet as it spawns itself |
 | `packages/agent-core` | the turn loop, tools, and Build, Captain, and Review roles |
@@ -110,6 +110,9 @@ curl -XPOST localhost:8787/api/threads/$TID/messages -H 'content-type: applicati
 | `GET·POST /api/projects` | list and create projects |
 | `GET /api/projects/:id` | one project with its threads and runs |
 | `POST /api/projects/:id/threads` | open a thread |
+| `GET·POST /api/projects/:id/schedules` | list and create timezone-aware scheduled work |
+| `PATCH·DELETE /api/schedules/:id` | edit, pause/resume, or soft-delete a schedule |
+| `POST /api/schedules/:id/run` | run a schedule immediately when no occurrence is active |
 | `GET /api/threads/:id` | a thread with its messages |
 | `POST /api/threads/:id/messages` | **starts work** — opens a run, queues the root captain |
 | `GET /api/runs/:id` | run with jobs, agents, events, artifacts |
@@ -127,7 +130,7 @@ and mounted outside CORS — no browser belongs here.
 | Route | Does |
 |---|---|
 | `POST /agent/claim` | take the job this token was minted for |
-| `POST /agent/start` | claimed → running |
+| `POST /agent/start` | claimed → running, and opens the run |
 | `POST /agent/heartbeat` | extend the lease; `ok: false` means stop immediately |
 | `POST /agent/events` | append a batch of events |
 | `GET /agent/inbox?after=` | messages addressed to this agent |
@@ -293,9 +296,15 @@ connection error so the user can sign in again; it never falls through to anothe
 ### Budgets
 
 A captain can spawn without limit — that is the point of the architecture, and also how an
-unbounded bill happens. Concurrency is capped by VM budget; total spend is capped by
-`KAPI_MAX_LLM_REQUESTS` and `KAPI_MAX_LLM_TOKENS`, checked *before* each call rather than
-after, because the point is not to make the request that crosses the line.
+unbounded bill happens. Concurrency is capped by VM budget. Total spend is capped by two
+different things: `KAPI_MAX_LLM_REQUESTS` globally, and the run's own `max_tokens` column.
+Both are checked *before* each call rather than after, because the point is not to make the
+request that crosses the line.
+
+Requests, tokens, aggregate VM-seconds, and provider cost are metered per run. Codex
+subscription tokens are never assigned invented dollar prices. `max_usd_cents` is enforced
+only when an authoritative provider rate such as `KAPI_DAYTONA_CENTS_PER_HOUR` is configured;
+otherwise the UI reports cost as unavailable and the VM-time budget remains the hard guard.
 
 ### Codex sign-in
 
@@ -312,8 +321,10 @@ not used because they are usage-billed separately from a ChatGPT/Codex subscript
 
 ### Auth
 
-With `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` set, requests carry a WorkOS AuthKit bearer
-token. Without them the plane runs as a single named local user and `/api/health` reports
+With `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` set, AuthKit sign-in establishes HttpOnly
+access and refresh cookies. REST and websocket handshakes verify the same session, and a
+socket checks run ownership before replaying history. Without WorkOS the plane runs as a
+single named local user and `/api/health` reports
 `"auth": "dev"` — an unauthenticated mode that is indistinguishable from a real one is how a
 dev shortcut ends up deployed, so this one says so out loud.
 
@@ -347,6 +358,25 @@ status exactly, which the test suite asserts.
 Both are exercised against real Postgres and a real VM: the suite kills a VM mid-job and
 asserts that the lease expires, the reaper requeues, a replacement VM starts, and the job
 finishes on its second attempt.
+
+### A run outlives no agent
+
+The queue reports facts about jobs; it knows nothing of runs, threads, or the messages a
+finished run writes into one. So `apps/control-plane/src/run-lifecycle.ts` owns every
+`runs.status` transition and translates one into the other. A run opens when any of its
+agents starts, and ends when its **root captain** does — whether that captain reported its own
+result or lost its lease and was dead-lettered by the reaper, which is wired to the same
+function.
+
+That second path is the one that matters. Without it a reaped root leaves a run queued with a
+null `finished_at` forever: a live-looking run in the UI that nothing will ever resolve, under
+exactly the failure this design claims to survive. Ending a run also writes the captain's
+closing summary into the thread as a turn, in the same transaction as the status — a thread
+you can only talk into is not a conversation.
+
+Both transitions are a single guarded `UPDATE ... WHERE`, so the HTTP path and the reaper can
+race freely: the loser's statement matches nothing. A run is never announced running twice,
+never walked backwards out of a terminal state, and never finished twice.
 
 ## Why not the previous version
 
@@ -400,6 +430,8 @@ Requires Node 22+ and pnpm 10.
 5. ~~Captain AI~~ — unbounded spawn, monitor, triage — done
 6. ~~GitHub App + CI check-runs~~ — repo-scoped installation tokens + streamed check results — done
 7. ~~Review agent + adaptive fail → fix loop~~ — structured verdicts, captain-directed fixes — done
+   (a run ends at an open pull request; **merging is a human's call**, and no agent can do it)
 8. ~~Web UI~~ — thread chat with the Captain, live agent tree resumed from a cursor — done
-9. Scheduler, orphan-VM reaping, cost accounting
+9. ~~Scheduler, orphan-VM reaping, cost accounting~~ — dedicated schedule threads, audit-first reconciliation, hybrid budgets — done
+10. ~~Production hardening~~ — Render services, AuthKit cookies, websocket ownership, cross-replica notifications, metrics and runbooks — done
 # kapi-final

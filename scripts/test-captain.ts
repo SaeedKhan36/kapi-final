@@ -17,7 +17,7 @@ import {
   runLoop, spawnAgentsTool, waitForAgentsTool,
   type FleetOps, type ToolContext,
 } from "@kapi/agent-core";
-import { claim, complete, enqueue, fail, getJob, listJobs } from "@kapi/queue";
+import { appendEvent, claim, complete, enqueue, fail, getJob, listJobs } from "@kapi/queue";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
@@ -416,6 +416,97 @@ await test("a captain cannot cancel an agent that is not its own", async () => {
 
 /* ------------------------------------------------------------------ */
 
+group("CI results are notices, not questions");
+
+/** Puts a completed check on the run, addressed to the captain, as the webhook does. */
+const deliverCheck = (runId: string, jobId: string, conclusion: string) =>
+  handle.transaction((tx) => appendEvent(tx, {
+    runId, jobId, kind: "ci.completed", from: "orchestrator", to: "captain",
+    payload: {
+      name: "unit tests", conclusion, branch: `kapi/${jobId}`,
+      url: "https://github.com/o/r/runs/1",
+      content: `unit tests completed with ${conclusion}`,
+    },
+  }));
+
+await test("a CI result is a system notice, not a worker waiting on an answer", async () => {
+  const cap = await captainOnRun();
+  await spawnAgentsTool.run({ agents: [{ role: "backend", instruction: "still going" }] }, cap.ctx);
+  await deliverCheck(cap.seeded.runId, cap.job.id, "success");
+
+  const res = await waitForAgentsTool.run({ timeout_seconds: 0 }, cap.ctx);
+
+  assert(res.output.includes("unit tests"), `the check is reported: ${res.output}`);
+  assert(res.output.includes("System notices"), "under its own heading");
+  // The bug this replaces: every CI event claimed a worker was blocked, and the
+  // captain answered `orchestrator`, an address nothing consumes.
+  assert(
+    !res.output.includes("A worker is waiting on an answer"),
+    `nobody is blocked on a check: ${res.output}`,
+  );
+});
+
+await test("a failing check ends the wait early; a passing one does not", async () => {
+  const failing = await captainOnRun();
+  await spawnAgentsTool.run(
+    { agents: [{ role: "backend", instruction: "never finishes" }] }, failing.ctx,
+  );
+  await deliverCheck(failing.seeded.runId, failing.job.id, "failure");
+
+  const started = Date.now();
+  const red = await waitForAgentsTool.run({ timeout_seconds: 60 }, failing.ctx);
+  assert(Date.now() - started < 30_000, "a red check is actionable now, not in ten minutes");
+  assert(red.output.includes("CI check failed"), `and says why it stopped: ${red.output}`);
+
+  const passing = await captainOnRun();
+  await spawnAgentsTool.run(
+    { agents: [{ role: "backend", instruction: "never finishes" }] }, passing.ctx,
+  );
+  await deliverCheck(passing.seeded.runId, passing.job.id, "success");
+
+  // A green check blocks nobody, so aborting the wait for one would cost a full
+  // model call to learn there is nothing to do.
+  const green = await waitForAgentsTool.run({ timeout_seconds: 6 }, passing.ctx);
+  assert(
+    green.output.includes("Still running") || green.output.includes("unit tests"),
+    `the wait ran its course: ${green.output}`,
+  );
+  assert(
+    !green.output.includes("CI check failed"),
+    "a passing check is not reported as a failure",
+  );
+});
+
+await test("check_agents drains the inbox, and a drained message is not re-served", async () => {
+  const cap = await captainOnRun();
+  await spawnAgentsTool.run({ agents: [{ role: "backend", instruction: "running" }] }, cap.ctx);
+  await deliverCheck(cap.seeded.runId, cap.job.id, "success");
+
+  // Only wait_for_agents used to poll, so a check that landed between spawns was
+  // invisible until the next wait - and never seen at all by a captain that
+  // finished without waiting again.
+  const checked = await checkAgentsTool.run({}, cap.ctx);
+  assert(checked.output.includes("unit tests"), `seen without waiting: ${checked.output}`);
+
+  // One cursor, shared by every tool: whoever drains it has consumed it.
+  const waited = await waitForAgentsTool.run({ timeout_seconds: 0 }, cap.ctx);
+  assert(!waited.output.includes("unit tests"), `not served twice: ${waited.output}`);
+});
+
+await test("reply_to_agent refuses an address no worker owns", async () => {
+  const cap = await captainOnRun();
+  const res = await replyToAgentTool.run(
+    { job_id: "orchestrator", answer: "thanks" }, cap.ctx,
+  );
+  equal(res.ok, false, "refused rather than sent into the void");
+  assert(
+    res.output.includes("cannot be replied to"),
+    `and says what to do instead: ${res.output}`,
+  );
+});
+
+/* ------------------------------------------------------------------ */
+
 group("the captain adapts to what comes back");
 
 await test("request_changes returns as evidence and only the captain starts a fixer", async () => {
@@ -585,7 +676,7 @@ await test("a refused spawn is reported to the model rather than thrown", async 
   );
 });
 
-hub.close();
-server.close();
+await hub.close();
+await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 await handle.close();
 report();

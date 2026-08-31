@@ -4,7 +4,7 @@ loadEnv();
 import { createDb, truncateAll } from "@kapi/db";
 import {
   cancelSubtree, claim, complete, enqueue, fail, getJob, heartbeat, listJobs,
-  markRunning, reap,
+  markRunning, reap, startReaper,
 } from "@kapi/queue";
 import type { Job, JobStatus } from "@kapi/protocol";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
@@ -253,6 +253,74 @@ await test("the reaper honours maxAttempts too", async () => {
 
   const reaped = await reap(handle);
   equal(reaped.find((j) => j.id === job.id)?.status, "failed", "no attempts left, so terminal");
+});
+
+await test("one reap distinguishes a requeued job from a dead-lettered one", async () => {
+  // The control plane reads exactly this to decide whether a run is over: a
+  // dead-lettered root ends its run, a requeued one must not. Both come back in
+  // the same batch, told apart only by their new status.
+  const s = await seedRun(handle);
+  const doomed = await build(s.runId, { maxAttempts: 1 });
+  const survivor = await build(s.runId, { maxAttempts: 3 });
+
+  await claim(handle, { vmId: "vm-1", runId: s.runId, jobId: doomed.id, leaseSeconds: 1 });
+  await claim(handle, { vmId: "vm-2", runId: s.runId, jobId: survivor.id, leaseSeconds: 1 });
+  await sleep(1200);
+
+  const reaped = await reap(handle);
+  equal(reaped.find((j) => j.id === doomed.id)?.status, "failed", "out of attempts, terminal");
+  equal(reaped.find((j) => j.id === survivor.id)?.status, "queued", "attempts left, requeued");
+});
+
+await test("startReaper awaits an async hook and survives one that throws", async () => {
+  const s = await seedRun(handle);
+  const first = await build(s.runId, { maxAttempts: 1 });
+  const second = await build(s.runId, { maxAttempts: 1 });
+
+  await claim(handle, { vmId: "vm-hook-1", runId: s.runId, jobId: first.id, leaseSeconds: 1 });
+  await sleep(1200);
+
+  // Note a batch is consumed by the reap that produced it: a hook that throws
+  // does not get those jobs offered again. What must survive is the reaper.
+  let threw = false;
+  let asyncBodyFinished = false;
+  const stop = startReaper(handle, {
+    // Slow enough that ticks do not pile up on a remote database: setInterval
+    // does not wait for an async tick, and overlapping reap transactions
+    // contend on the same rows and starve each other.
+    intervalMs: 250,
+    onReap: async (jobs) => {
+      if (jobs.some((j) => j.id === first.id)) {
+        threw = true;
+        throw new Error("a hook that blows up on the batch it was given");
+      }
+      if (jobs.some((j) => j.id === second.id)) {
+        // Awaited by the reaper, so this completes before the next tick can
+        // start. Unawaited, a slow hook and the tick after it race the same run.
+        await sleep(60);
+        asyncBodyFinished = true;
+      }
+    },
+  });
+
+  // Generous windows: normally a tick or two, but this suite runs against real
+  // Postgres and a slow link must read as slow, not as broken.
+  const until = async (done: () => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!done() && Date.now() < deadline) await sleep(100);
+  };
+
+  await until(() => threw);
+  assert(threw, "the hook was handed the reaped batch");
+
+  // A second expiry, after the throw. If a throwing hook killed the loop this
+  // one would never be seen at all.
+  await claim(handle, { vmId: "vm-hook-2", runId: s.runId, jobId: second.id, leaseSeconds: 1 });
+  await sleep(1200);
+  await until(() => asyncBodyFinished);
+  stop();
+
+  assert(asyncBodyFinished, "a later batch's async hook ran to completion");
 });
 
 /* ------------------------------------------------------------------ */

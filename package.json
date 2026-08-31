@@ -9,8 +9,11 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit && pnpm --filter @kapi/web typecheck",
-    "test:unit": "pnpm build:agent && tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
+    "test:unit": "pnpm build:agent && tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
+    "test:operations": "tsx scripts/test-operations.ts",
+    "test:smoke": "tsx scripts/smoke-production.ts",
     "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
     "db:studio": "drizzle-kit studio --config=packages/db/drizzle.config.ts",
     "db:reset": "tsx scripts/db-reset.ts",
     "dev:api": "pnpm build:agent && pnpm --filter @kapi/control-plane dev",

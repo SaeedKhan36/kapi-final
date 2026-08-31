@@ -5,10 +5,11 @@ import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 import { createDb, truncateAll } from "@kapi/db";
 import { Authenticator, mintJobToken } from "@kapi/identity";
-import { claim, getJob } from "@kapi/queue";
+import { claim, enqueue, getJob, reap } from "@kapi/queue";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
+import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { attachWebSocket } from "../apps/control-plane/src/ws.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
 
@@ -29,7 +30,7 @@ const app = createApp({ handle, store, hub, auth });
 const server = serve({ fetch: app.fetch, port: 0 });
 // The same wiring index.ts uses - the websocket tests below exercise the real
 // upgrade path, not a stand-in.
-const wss = attachWebSocket(server, hub);
+const wss = attachWebSocket(server, hub, { auth, store });
 await new Promise((r) => setTimeout(r, 150));
 const port = (server.address() as AddressInfo).port;
 const base = `http://127.0.0.1:${port}`;
@@ -112,6 +113,41 @@ await test("another user's project is a 404, not a 403", async () => {
   // indistinguishable from one that does not exist.
   const res = await api("GET", "/api/projects/prj_does_not_exist");
   equal(res.status, 404, "not found");
+});
+
+group("schedules API");
+
+let scheduleId = "";
+await test("a schedule owns a dedicated thread and validates its timezone", async () => {
+  const bad = await api("POST", `/api/projects/${projectId}/schedules`, {
+    name: "bad", cron: "0 9 * * *", timezone: "Moon/Base", goal: "never",
+  });
+  equal(bad.status, 400, "invalid timezone rejected");
+  const created = await api<{ id: string; threadId: string; nextRunAt: string }>(
+    "POST", `/api/projects/${projectId}/schedules`, {
+      name: "weekday review", cron: "0 9 * * 1-5", timezone: "Asia/Kolkata",
+      goal: "review repository health",
+    },
+  );
+  equal(created.status, 201, "created");
+  assert(created.body.threadId.startsWith("thr_"), "dedicated thread created");
+  assert(Boolean(created.body.nextRunAt), "next occurrence calculated");
+  scheduleId = created.body.id;
+});
+
+await test("schedules can pause, resume, and run without overlap", async () => {
+  const paused = await api<{ enabled: boolean; nextRunAt: string | null }>(
+    "PATCH", `/api/schedules/${scheduleId}`, { enabled: false },
+  );
+  equal(paused.body.enabled, false, "paused");
+  equal(paused.body.nextRunAt, null, "no occurrence while paused");
+  const resumed = await api<{ enabled: boolean }>("PATCH", `/api/schedules/${scheduleId}`, { enabled: true });
+  equal(resumed.body.enabled, true, "resumed");
+  const first = await api<{ run: { id: string } }>("POST", `/api/schedules/${scheduleId}/run`);
+  equal(first.status, 202, "manual occurrence started");
+  const second = await api("POST", `/api/schedules/${scheduleId}/run`);
+  equal(second.status, 409, "overlap skipped");
+  await api("POST", `/api/runs/${first.body.run.id}/cancel`);
 });
 
 /* ------------------------------------------------------------------ */
@@ -228,6 +264,131 @@ await test("connecting with cursor 0 replays the whole run", async () => {
   assert(replayed && replayed.count >= 2, `full history replayed, got ${replayed?.count}`);
 });
 
+await test("a socket cannot subscribe to a run it does not own or that does not exist", async () => {
+  const opened = await new Promise<boolean>((resolve) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws?runId=run_not_owned`);
+    socket.onopen = () => { socket.close(); resolve(true); };
+    socket.onerror = () => resolve(false);
+    socket.onclose = () => resolve(false);
+  });
+  equal(opened, false, "upgrade rejected before replay");
+});
+
+/* ------------------------------------------------------------------ */
+
+group("run lifecycle");
+
+// The same object index.ts wires into the reaper, so these tests cover the
+// production path rather than a stand-in for it.
+const lifecycle = createRunLifecycle({ handle, store });
+
+/** A thread of its own per test: the groups above hold module-level ids. */
+async function freshRun(goal: string): Promise<{ runId: string; jobId: string }> {
+  const thread = await api<{ id: string }>("POST", `/api/projects/${projectId}/threads`, {});
+  const started = await api<{ run: { id: string }; job: { id: string } }>(
+    "POST", `/api/threads/${thread.body.id}/messages`, { content: goal },
+  );
+  return { runId: started.body.run.id, jobId: started.body.job.id };
+}
+
+const runStatusEvents = async (id: string, status: string) => {
+  const events = await store.listEvents(id, 0);
+  return events.filter((e) => e.kind === "run.status" && e.payload.status === status);
+};
+
+const startAgent = async (runId: string, jobId: string, vmId: string) => {
+  const token = mintJobToken({ jobId, runId, vmId });
+  return fetch(`${base}/agent/start`, {
+    method: "POST", headers: { authorization: `Bearer ${token}` },
+  });
+};
+
+await test("starting an agent moves the run from queued to running", async () => {
+  const { runId: id, jobId } = await freshRun("open the run");
+  equal((await store.getRun(id))?.status, "queued", "a run starts queued");
+
+  await claim(handle, { vmId: "vm-open", jobId, runId: id });
+  await startAgent(id, jobId, "vm-open");
+
+  equal((await store.getRun(id))?.status, "running", "the run is running once an agent is");
+  equal((await runStatusEvents(id, "running")).length, 1, "and it said so exactly once");
+});
+
+await test("a second agent starting does not re-announce the run as running", async () => {
+  const { runId: id, jobId } = await freshRun("announce once");
+  await claim(handle, { vmId: "vm-a", jobId, runId: id });
+  await startAgent(id, jobId, "vm-a");
+
+  // A captain spawns freely, and every one of its children starts. The
+  // transition has to be idempotent or the stream fills with noise.
+  const child = await enqueue(handle, {
+    runId: id, parentJobId: jobId, kind: "build", role: "backend",
+    instruction: "a child that also starts", acceptance: [], touches: [],
+    dependsOn: [], priority: 0, maxAttempts: 3, context: {},
+  });
+  await claim(handle, { vmId: "vm-b", jobId: child.id, runId: id });
+  await startAgent(id, child.id, "vm-b");
+
+  equal((await runStatusEvents(id, "running")).length, 1, "still exactly one running event");
+});
+
+await test("a cancelled run is never walked back to running", async () => {
+  const { runId: id, jobId } = await freshRun("cancel before starting");
+  await api("POST", `/api/runs/${id}/cancel`);
+
+  await claim(handle, { vmId: "vm-late", jobId, runId: id });
+  await startAgent(id, jobId, "vm-late");
+
+  equal((await store.getRun(id))?.status, "cancelled", "cancelled is final");
+  equal((await runStatusEvents(id, "running")).length, 0, "and nothing announced otherwise");
+});
+
+await test("a dead-lettered root captain finishes its run", async () => {
+  const { runId: id, jobId } = await freshRun("lose the captain");
+  // The message route hardcodes three attempts; one makes the next reap final.
+  await handle.raw(`UPDATE jobs SET max_attempts = 1 WHERE id = $1`, [jobId]);
+  await claim(handle, { vmId: "vm-doomed", jobId, runId: id, leaseSeconds: 1 });
+
+  await sleep(1200);
+  const reaped = await reap(handle);
+  const dead = reaped.find((j) => j.id === jobId);
+  equal(dead?.status, "failed", "the reaper dead-lettered the captain");
+
+  await lifecycle.onReap(reaped);
+
+  const run = await store.getRun(id);
+  equal(run?.status, "failed", "the run ended with the captain that was driving it");
+  assert(run?.finishedAt !== null, "and it has a finish time");
+  equal((await runStatusEvents(id, "failed")).length, 1, "the stream says so once");
+
+  // The user-visible half: a thread that can only be talked into is not a
+  // conversation. Without this the run simply goes quiet forever.
+  const thread = await store.getRun(id).then((r) => r!.threadId);
+  const messages = await store.listMessages(thread);
+  assert(
+    messages.some((m) => m.role === "captain"),
+    "the thread was answered rather than left hanging",
+  );
+});
+
+await test("a requeued root does not finish its run", async () => {
+  const { runId: id, jobId } = await freshRun("survive one lost VM");
+  // Attempts remain, so this reap requeues rather than dead-letters - and a run
+  // that announced itself failed and then carried on would be worse than one
+  // that said nothing.
+  await claim(handle, { vmId: "vm-flaky", jobId, runId: id, leaseSeconds: 1 });
+
+  await sleep(1200);
+  const reaped = await reap(handle);
+  equal(reaped.find((j) => j.id === jobId)?.status, "queued", "back on the queue, not dead");
+
+  await lifecycle.onReap(reaped);
+
+  const run = await store.getRun(id);
+  assert(run?.status !== "failed", `the run is still alive, got ${run?.status}`);
+  equal(run?.finishedAt, null, "and has no finish time");
+});
+
 /* ------------------------------------------------------------------ */
 
 group("GitHub check webhooks");
@@ -280,7 +441,9 @@ await test("a completed check lands once in the correlated run and captain inbox
   });
   equal(inbox.status, 200, "the captain inbox is readable");
   const messages = await inbox.json() as {
-    messages: Array<{ from: string; content: string; payload: Record<string, unknown> }>;
+    messages: Array<{
+      from: string; kind: string; content: string; payload: Record<string, unknown>;
+    }>;
   };
   assert(
     messages.messages.some((message) =>
@@ -288,6 +451,43 @@ await test("a completed check lands once in the correlated run and captain inbox
       message.content.includes("unit tests completed with success")
     ),
     "the captain receives the CI completion without polling GitHub",
+  );
+});
+
+await test("an inbox message carries the kind of event it came from", async () => {
+  // A worker's question and a CI result arrive through the same inbox and
+  // demand opposite responses - one blocks an agent until answered, the other
+  // cannot be replied to at all. Without the kind they are indistinguishable.
+  const child = await enqueue(handle, {
+    runId, parentJobId: captainJobId, kind: "build", role: "backend",
+    instruction: "ask something", acceptance: [], touches: [],
+    dependsOn: [], priority: 0, maxAttempts: 3, context: {},
+  });
+  await claim(handle, { vmId: "vm-asker", jobId: child.id, runId });
+  const childToken = mintJobToken({ jobId: child.id, runId, vmId: "vm-asker" });
+  await fetch(`${base}/agent/events`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${childToken}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      events: [{ kind: "agent.message", to: "captain", payload: { content: "which branch?" } }],
+    }),
+  });
+
+  const token = mintJobToken({ jobId: captainJobId, runId, vmId: "test-vm" });
+  const res = await fetch(`${base}/agent/inbox?after=0`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const { messages } = await res.json() as {
+    messages: Array<{ from: string; kind: string; content: string }>;
+  };
+
+  assert(
+    messages.some((m) => m.kind === "ci.completed" && m.from === "orchestrator"),
+    "the CI result is labelled as what it is",
+  );
+  assert(
+    messages.some((m) => m.kind === "agent.message" && m.content === "which branch?"),
+    "and a worker's question is labelled separately",
   );
 });
 
@@ -379,7 +579,7 @@ await test("a secret can be deleted", async () => {
 });
 
 wss.close();
-hub.close();
-server.close();
+await hub.close();
+await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 await handle.close();
 report();

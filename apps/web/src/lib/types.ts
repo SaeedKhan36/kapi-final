@@ -39,10 +39,20 @@ export type Message = {
 export type Run = {
   id: string; threadId: string; projectId: string; goal: string; status: string;
   maxConcurrentVms: number; maxTotalSpawns: number; maxSpawnDepth: number;
-  maxTokens: number; maxUsdCents: number;
+  maxTokens: number; maxLlmRequests: number; maxVmSeconds: number; maxUsdCents: number;
   llmRequests: number; llmTokens: number; usdCents: number;
+  usdMicros: number; costStatus: "known" | "partial" | "unavailable";
   totalSpawns: number; vmSeconds: number; eventSeq: number;
+  scheduleId: string | null; scheduledFor: string | null;
   error: string | null; createdAt: string; finishedAt: string | null;
+};
+
+export type Schedule = {
+  id: string; projectId: string; threadId: string; name: string; cron: string;
+  timezone: string; goal: string; enabled: boolean;
+  lastRunAt: string | null; lastScheduledAt: string | null; lastSkippedAt: string | null;
+  lastStatus: string | null; lastError: string | null; nextRunAt: string | null;
+  createdAt: string; updatedAt: string; deletedAt: string | null;
 };
 
 export type FileRef = { path: string; action: string };

@@ -140,7 +140,7 @@ console.log(`  jobs     ${(await listJobs(handle, run.id)).length}\n`);
 
 stopProvisioner();
 await provisioner.destroyAll();
-hub.close();
-server.close();
+await hub.close();
+await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 await handle.close();
 process.exit(final?.status === "succeeded" ? 0 : 1);

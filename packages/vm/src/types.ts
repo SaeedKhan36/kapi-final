@@ -21,6 +21,8 @@ export type VmSpec = {
    * the only backstop that survives losing track of a VM entirely.
    */
   idleTtlSeconds?: number;
+  /** Provider-visible ownership labels used by the orphan reconciler. */
+  metadata?: Record<string, string>;
 };
 
 export type Vm = {
@@ -28,6 +30,14 @@ export type Vm = {
   provider: string;
   workdir: string;
   createdAt: number;
+  metadata?: Record<string, string>;
+};
+
+export type ManagedVm = Vm & {
+  name?: string;
+  status?: string;
+  /** True only when the provider found the explicit kapi.managed label. */
+  managed: true;
 };
 
 export type ExecOptions = {
@@ -69,6 +79,8 @@ export interface VmProvider {
    * provider cannot reattach.
    */
   destroyOrphan?(id: string): Promise<boolean>;
+  /** Complete inventory of explicitly labelled KAPI resources. */
+  listManaged?(): Promise<ManagedVm[]>;
   /** Best-effort cleanup of anything this process leaked. */
   destroyAll?(): Promise<void>;
 }

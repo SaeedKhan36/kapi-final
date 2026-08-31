@@ -67,10 +67,16 @@ export function RunPanel(
           <span>{state.order.length} agents</span>
           {Object.entries(counts).map(([status, n]) => <span key={status}>{status} {n}</span>)}
           <span className="text-muted/70">
-            {run.llmRequests} llm calls · {run.llmTokens.toLocaleString()} tokens
+            model {run.llmRequests}/{run.maxLlmRequests} requests · {run.llmTokens.toLocaleString()}/{run.maxTokens.toLocaleString()} tokens
           </span>
           <span className="text-muted/70">
             spawns {run.totalSpawns}/{run.maxTotalSpawns} · depth ≤ {run.maxSpawnDepth}
+          </span>
+          <span className="text-muted/70">
+            VM {run.vmSeconds.toLocaleString()}/{run.maxVmSeconds.toLocaleString()}s
+          </span>
+          <span className="text-muted/70">
+            cost {run.costStatus === "unavailable" ? "unavailable" : `$${(run.usdCents / 100).toFixed(2)}/${(run.maxUsdCents / 100).toFixed(2)}`} ({run.costStatus})
           </span>
         </div>
       </Card>

@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
-  ExecOptions, ExecResult, LogChunk, Vm, VmProvider, VmSpec,
+  ExecOptions, ExecResult, LogChunk, ManagedVm, Vm, VmProvider, VmSpec,
 } from "../types.ts";
 import { VmError } from "../types.ts";
 
@@ -33,12 +33,16 @@ export class DockerProvider implements VmProvider {
     const name = `kapi-${spec.name.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 40)}-${Date.now().toString(36)}`;
     const args = [
       "run", "-d", "--name", name,
+      "--label", "kapi.managed=true",
       "--workdir", workdir,
       // Defence in depth: agents run untrusted generated code.
       "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges",
       "--pids-limit", "512",
     ];
+    for (const [k, v] of Object.entries(spec.metadata ?? {})) {
+      args.push("--label", `kapi.${k}=${v}`);
+    }
     if (spec.cpus) args.push("--cpus", String(spec.cpus));
     if (spec.memoryMb) args.push("--memory", `${spec.memoryMb}m`);
     for (const [k, v] of Object.entries(spec.env ?? {})) args.push("-e", `${k}=${v}`);
@@ -50,7 +54,7 @@ export class DockerProvider implements VmProvider {
       const { stdout } = await run("docker", args);
       const id = stdout.trim();
       await run("docker", ["exec", id, "mkdir", "-p", workdir]);
-      const box: Vm = { id, provider: this.name, workdir, createdAt: Date.now() };
+      const box: Vm = { id, provider: this.name, workdir, createdAt: Date.now(), metadata: spec.metadata };
       this.#boxes.set(id, box);
       return box;
     } catch (cause) {
@@ -156,6 +160,28 @@ export class DockerProvider implements VmProvider {
     } catch {
       return false;
     }
+  }
+
+  async listManaged(): Promise<ManagedVm[]> {
+    const { stdout } = await run("docker", ["ps", "-aq", "--filter", "label=kapi.managed=true"]);
+    const ids = stdout.trim().split(/\s+/).filter(Boolean);
+    if (ids.length === 0) return [];
+    const inspected = await run("docker", ["inspect", ...ids]);
+    const rows = JSON.parse(inspected.stdout) as Array<any>;
+    return rows
+      .filter((r) => r.Config?.Labels?.["kapi.managed"] === "true")
+      .map((r) => {
+        const labels = r.Config.Labels as Record<string, string>;
+        const metadata = Object.fromEntries(
+          Object.entries(labels).filter(([k]) => k.startsWith("kapi.") && k !== "kapi.managed")
+            .map(([k, v]) => [k.slice(5), v]),
+        );
+        return {
+          id: r.Id, provider: this.name, workdir: "/workspace",
+          createdAt: Date.parse(r.Created), metadata, managed: true as const,
+          name: String(r.Name ?? "").replace(/^\//, ""), status: r.State?.Status,
+        };
+      });
   }
 
   async destroyAll() {

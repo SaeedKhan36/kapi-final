@@ -21,6 +21,8 @@ export type Principal = {
  * `auth: "dev"` loudly.
  */
 const DEV_WORKOS_ID = "dev-local-user";
+export const ACCESS_COOKIE = "kapi_access";
+export const REFRESH_COOKIE = "kapi_refresh";
 
 export class Authenticator {
   #workos: WorkOSAuth | null;
@@ -38,10 +40,11 @@ export class Authenticator {
    * Resolves the caller. Throws WorkOSError(401) when a session is required
    * and absent or invalid.
    */
-  async authenticate(authorization?: string): Promise<Principal> {
+  async authenticate(authorization?: string, cookieHeader?: string): Promise<Principal> {
     if (!this.#workos) return this.#devPrincipal();
 
-    const token = authorization?.replace(/^Bearer\s+/i, "").trim();
+    const token = authorization?.replace(/^Bearer\s+/i, "").trim()
+      || cookieValue(cookieHeader, ACCESS_COOKIE);
     if (!token) throw new WorkOSError("sign in to continue", 401, "UNAUTHENTICATED");
 
     const verified = await this.#workos.verify(token);
@@ -55,6 +58,21 @@ export class Authenticator {
     const profile = await this.#workos.getUser(verified.id).catch(() => verified);
     const created = await this.#upsert(profile);
     return { ...created, organizationId: verified.organizationId, via: "workos" };
+  }
+
+  authorizationUrl(redirectUri: string, state: string): string {
+    if (!this.#workos) throw new WorkOSError("WorkOS is not configured", 503);
+    return this.#workos.authorizationUrl({ redirectUri, state });
+  }
+
+  async authenticateWithCode(code: string, redirectUri: string) {
+    if (!this.#workos) throw new WorkOSError("WorkOS is not configured", 503);
+    return this.#workos.authenticateWithCode(code, redirectUri);
+  }
+
+  async refreshSession(refreshToken: string) {
+    if (!this.#workos) throw new WorkOSError("WorkOS is not configured", 503);
+    return this.#workos.refreshSession(refreshToken);
   }
 
   async #devPrincipal(): Promise<Principal> {
@@ -101,4 +119,12 @@ export class Authenticator {
       name: row.name ?? undefined,
     };
   }
+}
+
+export function cookieValue(header: string | undefined, name: string): string | undefined {
+  for (const part of (header ?? "").split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return decodeURIComponent(rest.join("="));
+  }
+  return undefined;
 }

@@ -64,7 +64,12 @@ function toolContext(
         await new Promise((r) => setTimeout(r, 5_000));
         const { messages, cursor: next } = await rc.client.inbox(cursor);
         cursor = next;
-        const reply = messages.find((m) => m.from === parent || m.from === "captain");
+        // Only a real message answers a question. A worker's inbox cannot
+        // receive a CI notice today, but the guard keeps that invariant here
+        // rather than inferred from a routing rule two packages away.
+        const reply = messages.find(
+          (m) => m.kind === "agent.message" && (m.from === parent || m.from === "captain"),
+        );
         if (reply) return reply.content;
       }
       return null;
@@ -418,4 +423,5 @@ export const ROLES: Record<string, RoleHandler> = {
   review: reviewRole,
 };
 
-export const handlerFor = (kind: string): RoleHandler => ROLES[kind] ?? echoRole;
+export const handlerFor = (kind: string): RoleHandler =>
+  process.env.KAPI_TEST_ECHO_ROLE === "true" ? echoRole : ROLES[kind] ?? echoRole;

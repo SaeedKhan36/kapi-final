@@ -1,5 +1,5 @@
 import type {
-  ExecOptions, ExecResult, LogChunk, Vm, VmProvider, VmSpec,
+  ExecOptions, ExecResult, LogChunk, ManagedVm, Vm, VmProvider, VmSpec,
 } from "../types.ts";
 import { VmError } from "../types.ts";
 
@@ -64,10 +64,14 @@ export class DaytonaProvider implements VmProvider {
         : {};
 
       const handle = await daytona.create({
+        name: spec.name,
         language: "typescript",
         ...(spec.image ? { image: spec.image } : {}),
         envVars: spec.env,
         autoStopInterval: Math.max(1, Math.round((spec.idleTtlSeconds ?? 900) / 60)),
+        labels: { "kapi.managed": "true", ...Object.fromEntries(
+          Object.entries(spec.metadata ?? {}).map(([k, v]) => [`kapi.${k}`, v]),
+        ) },
         ...resources,
       });
       const id = handle.id ?? handle.vmId;
@@ -81,7 +85,7 @@ export class DaytonaProvider implements VmProvider {
         throw new VmError(`could not create workdir ${workdir}: ${made.result ?? ""}`, this.name);
       }
 
-      const box: Vm = { id, provider: this.name, workdir, createdAt: Date.now() };
+      const box: Vm = { id, provider: this.name, workdir, createdAt: Date.now(), metadata: spec.metadata };
       this.#boxes.set(id, { handle, box });
       return box;
     } catch (cause) {
@@ -201,6 +205,24 @@ export class DaytonaProvider implements VmProvider {
     } catch {
       return false;
     }
+  }
+
+  async listManaged(): Promise<ManagedVm[]> {
+    const daytona = await this.#sdk();
+    const rows: any[] = [];
+    if (daytona.list) {
+      for await (const sandbox of daytona.list({ labels: { "kapi.managed": "true" } })) rows.push(sandbox);
+    }
+    return rows.flatMap((handle) => {
+      const labels = (handle.labels ?? handle.metadata?.labels ?? {}) as Record<string, string>;
+      if (labels["kapi.managed"] !== "true") return [];
+      return [{
+        id: handle.id ?? handle.vmId, provider: this.name,
+        workdir: "/home/daytona/workspace", createdAt: Date.parse(handle.createdAt ?? handle.created_at) || Date.now(),
+        metadata: Object.fromEntries(Object.entries(labels).filter(([k]) => k.startsWith("kapi.") && k !== "kapi.managed").map(([k, v]) => [k.slice(5), v])),
+        managed: true as const, name: handle.name, status: handle.state ?? handle.status,
+      }];
+    });
   }
 
   async destroyAll() {

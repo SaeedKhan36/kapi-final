@@ -4,13 +4,15 @@ import { JobTokenError, verifyJobToken, type JobTokenClaims } from "@kapi/identi
 import {
   AgentCancelRequestSchema, AgentCompleteRequestSchema, AgentEventsRequestSchema,
   AgentSpawnRequestSchema, agentId, isJobTerminal, normaliseVerdict,
-  type AgentChild, type AgentInboxMessage, type Job, type SpawnedAgent, type SpawnRefusal,
+  type AgentChild, type AgentInboxMessage, type EventKind,
+  type SpawnedAgent, type SpawnRefusal,
 } from "@kapi/protocol";
 import {
   appendEvent, cancelSubtree, claim, complete, enqueue, fail, getJob, heartbeat,
   markRunning, toJob, JOB_COLUMNS, type JobRow,
 } from "@kapi/queue";
 import type { Store } from "./store.ts";
+import { createRunLifecycle } from "./run-lifecycle.ts";
 import type { EventHub } from "./events.ts";
 import { createModelProxy } from "./model-proxy.ts";
 
@@ -49,38 +51,10 @@ export function createAgentApi(deps: {
     for (const e of await store.listEvents(runId, afterSeq)) hub.publish(e);
   };
 
-  /**
-   * A run ends when its ROOT captain does, and the captain's closing summary is
-   * written back into the thread as a turn.
-   *
-   * The thread is the human-facing half of a run. Everything the fleet says
-   * lives in `events`, which is machine trace - without this the user can only
-   * ever talk into a thread and never be answered in it.
-   *
-   * Only a TERMINAL root counts: `fail` requeues while attempts remain, and a
-   * run that announces itself failed and then carries on is worse than one that
-   * says nothing.
-   */
-  const finishRun = async (job: Job) => {
-    const run = await store.getRun(job.runId);
-    if (!run || run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
-      return;
-    }
-
-    const status = job.status === "succeeded" ? "completed" : "failed";
-    const summary = job.result?.summary ?? job.error ?? `the captain ${job.status}`;
-
-    await store.setRunStatus(run.id, status, job.error ?? undefined);
-    await store.createMessage({
-      threadId: run.threadId, role: "captain", content: summary, runId: run.id,
-    });
-    await handle.transaction(async (tx) => {
-      await appendEvent(tx, {
-        runId: run.id, jobId: job.id, kind: "run.status", from: "orchestrator",
-        payload: { status, summary },
-      });
-    });
-  };
+  // Run status, and the captain's closing turn, live in one module shared with
+  // the reaper's hook - a run must end the same way whether its captain
+  // reported the result itself or lost its lease and was dead-lettered.
+  const runs = createRunLifecycle({ handle, store });
 
   /**
    * Claim the job this token was minted for.
@@ -121,6 +95,10 @@ export function createAgentApi(deps: {
     const job = await markRunning(handle, jobId, vmId);
     if (job) {
       await handle.raw(`UPDATE agents SET status = 'running' WHERE job_id = $1`, [jobId]);
+      // A run is running once any of its agents is. Guarded inside, so this
+      // announces the transition once however many agents start after it.
+      // `before` was captured above, so the single flush covers both events.
+      await runs.startRun(runId, jobId);
       await flush(runId, before);
     }
     return c.json({ ok: job !== null });
@@ -193,9 +171,13 @@ export function createAgentApi(deps: {
       [runId, Number.isFinite(after) ? after : 0, addresses],
     );
 
+    // The kind travels with the message. A worker's question and a completed
+    // CI check arrive through the same inbox and demand opposite responses -
+    // one blocks an agent until answered, the other cannot be replied to at all.
     const messages: AgentInboxMessage[] = rows.map((r) => ({
       seq: Number(r.seq),
       from: r.from_agent,
+      kind: r.kind as EventKind,
       content: String(r.payload?.content ??
         (r.kind === "ci.completed" ? "GitHub CI completed." : "")),
       payload: r.payload ?? {},
@@ -449,7 +431,7 @@ export function createAgentApi(deps: {
 
     // Before the flush, so the run.status event this may append travels with
     // the job transition that caused it rather than a poll interval behind.
-    if (job.parentJobId === null && isJobTerminal(job.status)) await finishRun(job);
+    if (job.parentJobId === null && isJobTerminal(job.status)) await runs.finishRun(job);
 
     await flush(runId, before);
     return c.json({ ok: true, status: job.status });

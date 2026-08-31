@@ -1,23 +1,10 @@
 import type {
-  Health, Job, Message, Principal, Project, Run, RunDetail, RunEvent, Thread,
+  Health, Job, Message, Principal, Project, Run, RunDetail, RunEvent, Schedule, Thread,
 } from "./types.ts";
 
-const TOKEN_KEY = "kapi.token";
-
-/**
- * The bearer token, when there is one.
- *
- * The plane runs `auth: "dev"` with WORKOS_* unset and authenticates nothing;
- * with them set every /api call needs an AuthKit token. Rather than build a
- * sign-in flow the plane cannot yet complete, the token is read from local
- * storage - so a real deployment works today by pasting one in, and dev needs
- * nothing at all.
- */
-export const authToken = {
-  get: () => localStorage.getItem(TOKEN_KEY),
-  set: (value: string | null) =>
-    value ? localStorage.setItem(TOKEN_KEY, value) : localStorage.removeItem(TOKEN_KEY),
-};
+const configuredBase = String(import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+export const apiBase = configuredBase && !/^https?:\/\//.test(configuredBase)
+  ? `https://${configuredBase}` : configuredBase;
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -26,17 +13,20 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const token = authToken.get();
-  const res = await fetch(path, {
+async function request<T>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
+  const res = await fetch(`${apiBase}${path}`, {
     method,
+    credentials: "include",
     headers: {
       ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
+  if (res.status === 401 && !retried && path !== "/api/health") {
+    const refreshed = await fetch(`${apiBase}/auth/refresh`, { method: "POST", credentials: "include" });
+    if (refreshed.ok) return request<T>(method, path, body, true);
+  }
   if (!res.ok) {
     const detail = (await res.json().catch(() => ({}))) as { error?: string };
     throw new ApiError(detail.error ?? `HTTP ${res.status}`, res.status);
@@ -45,6 +35,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  loginUrl: (returnTo = location.href) => `${apiBase}/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+  logout: () => request<void>("POST", "/auth/logout"),
   health: () => request<Health>("GET", "/api/health"),
   me: () => request<Principal>("GET", "/api/me"),
 
@@ -53,6 +45,17 @@ export const api = {
     request<Project>("POST", "/api/projects", body),
   getProject: (id: string) =>
     request<{ project: Project; threads: Thread[]; runs: Run[] }>("GET", `/api/projects/${id}`),
+
+  listSchedules: (projectId: string) =>
+    request<Schedule[]>("GET", `/api/projects/${projectId}/schedules`),
+  createSchedule: (projectId: string, body: {
+    name: string; cron: string; timezone: string; goal: string; enabled?: boolean;
+  }) => request<Schedule>("POST", `/api/projects/${projectId}/schedules`, body),
+  updateSchedule: (id: string, body: Partial<{
+    name: string; cron: string; timezone: string; goal: string; enabled: boolean;
+  }>) => request<Schedule>("PATCH", `/api/schedules/${id}`, body),
+  deleteSchedule: (id: string) => request<void>("DELETE", `/api/schedules/${id}`),
+  runSchedule: (id: string) => request<{ run: Run }>("POST", `/api/schedules/${id}/run`),
 
   createThread: (projectId: string, title?: string) =>
     request<Thread>("POST", `/api/projects/${projectId}/threads`, title ? { title } : {}),

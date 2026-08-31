@@ -10,6 +10,7 @@ import { LocalProvider } from "@kapi/vm";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Provisioner } from "../apps/control-plane/src/provisioner.ts";
+import { RequestTracker } from "../apps/control-plane/src/request-tracker.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
 import { seedRun } from "./seed.ts";
@@ -18,6 +19,10 @@ if (!process.env.DATABASE_URL) process.env.KAPI_PGLITE_DIR = "memory://agent-tes
 if (!process.env.KAPI_SECRET_KEY) {
   process.env.KAPI_SECRET_KEY = Buffer.alloc(32, 9).toString("base64");
 }
+// The real Build/Review roles require a repository and model. This suite is
+// intentionally about VM bootstrap and lease recovery, so its provisioned
+// agents select the deterministic echo handler.
+process.env.KAPI_TEST_ECHO_ROLE = "true";
 
 const handle = await createDb();
 console.log(`\n  database: ${handle.target}`);
@@ -26,7 +31,8 @@ await truncateAll(handle);
 const store = new Store(handle);
 const hub = new EventHub(store, handle, 250);
 const auth = new Authenticator(handle);
-const app = createApp({ handle, store, hub, auth, vmProvider: "local" });
+const requests = new RequestTracker();
+const app = createApp({ handle, store, hub, auth, requests, vmProvider: "local" });
 const server = serve({ fetch: app.fetch, port: 0 });
 await sleep(150);
 const port = (server.address() as AddressInfo).port;
@@ -41,10 +47,7 @@ const provisioner = new Provisioner(handle, {
 });
 
 // This suite tests bootstrap plumbing - claim/heartbeat/complete, VM lifecycle,
-// budgets, crash recovery - not build logic, so `kind: "review"` is deliberate:
-// it maps to the Phase 2 echo handler and needs no real repository to clone.
-// `kind: "build"` now runs the real Build agent (Phase 4), which would fail
-// these jobs outright with no repoUrl in their context.
+// budgets, and crash recovery - not model/repository behavior.
 const echoJob = (runId: string, over: Record<string, unknown> = {}) =>
   enqueue(handle, {
     runId, kind: "review", role: "backend", instruction: "echo something",
@@ -54,7 +57,8 @@ const echoJob = (runId: string, over: Record<string, unknown> = {}) =>
 
 /** Polls until `check` passes or the budget runs out. */
 async function waitFor<T>(
-  label: string, check: () => Promise<T | null>, timeoutMs = 30_000,
+  label: string, check: () => Promise<T | null>,
+  timeoutMs = process.env.DATABASE_URL ? 90_000 : 30_000,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -248,6 +252,18 @@ await test("the concurrency budget caps how many VMs a run gets at once", async 
 });
 
 await test("a finished job's VM is reclaimed", async () => {
+  // The prior concurrency test intentionally starts several asynchronous
+  // agents. Wait for those processes to report terminal state before taking a
+  // single deterministic reclaim snapshot; production performs this pass on a
+  // timer and naturally catches later finishes on the next pass.
+  await waitFor("provisioned agents to settle", async () => {
+    const rows = await handle.raw<{ n: string }>(
+      `SELECT count(*)::text AS n FROM agents a JOIN jobs j ON j.id=a.job_id
+       WHERE a.vm_id IS NOT NULL AND a.provider='local' AND a.stopped_at IS NULL
+         AND j.status NOT IN ('succeeded','failed','cancelled')`,
+    );
+    return Number(rows[0]?.n ?? 0) === 0 ? true : null;
+  });
   const before = await handle.raw<{ n: string }>(
     `SELECT count(*)::text AS n FROM agents WHERE vm_id IS NOT NULL AND stopped_at IS NOT NULL`,
   );
@@ -300,8 +316,11 @@ await test("a dead VM's job is requeued and a new VM finishes it", async () => {
   assert(finished.result?.ok, "and the replacement completed it");
 });
 
+const serverClosed = new Promise<void>((resolve, reject) =>
+  server.close((err) => err ? reject(err) : resolve()));
 await provisioner.destroyAll();
-hub.close();
-server.close();
+await hub.close();
+await requests.drain();
+await serverClosed;
 await handle.close();
 report();

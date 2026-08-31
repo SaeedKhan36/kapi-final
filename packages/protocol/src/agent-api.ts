@@ -57,10 +57,23 @@ export const AgentHeartbeatResponseSchema = z.object({
 });
 export type AgentHeartbeatResponse = z.infer<typeof AgentHeartbeatResponseSchema>;
 
-/** Messages addressed to this agent, for a captain steering a worker mid-flight. */
+/**
+ * One message addressed to this agent.
+ *
+ * Two very different things arrive here: a worker's question, which blocks that
+ * worker until it is answered, and a system notice such as a completed CI
+ * check, which cannot be replied to at all. `kind` is what lets the receiver
+ * tell them apart - without it every notice reads as a blocked worker.
+ *
+ * The default is deliberately the question side: an agent bundle built before
+ * this field existed sends none, and treating an unlabelled message as a
+ * question costs a wasted turn, where the inverse would silently strand a
+ * worker waiting for an answer that never comes.
+ */
 export const AgentInboxMessageSchema = z.object({
   seq: z.number().int(),
   from: z.string(),
+  kind: EventKindSchema.default("agent.message"),
   content: z.string(),
   payload: z.record(z.unknown()).default({}),
 });

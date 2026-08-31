@@ -54,12 +54,18 @@ CREATE TABLE IF NOT EXISTS runs (
   max_total_spawns INTEGER NOT NULL DEFAULT 200,
   max_spawn_depth INTEGER NOT NULL DEFAULT 4,
   max_tokens INTEGER NOT NULL DEFAULT 20000000,
+  max_llm_requests INTEGER NOT NULL DEFAULT 1000,
+  max_vm_seconds INTEGER NOT NULL DEFAULT 86400,
   max_usd_cents INTEGER NOT NULL DEFAULT 2000,
   llm_requests INTEGER NOT NULL DEFAULT 0,
   llm_tokens INTEGER NOT NULL DEFAULT 0,
   usd_cents INTEGER NOT NULL DEFAULT 0,
+  usd_micros BIGINT NOT NULL DEFAULT 0,
+  cost_status TEXT NOT NULL DEFAULT 'unavailable',
   total_spawns INTEGER NOT NULL DEFAULT 0,
   vm_seconds INTEGER NOT NULL DEFAULT 0,
+  schedule_id TEXT,
+  scheduled_for TIMESTAMPTZ,
   event_seq INTEGER NOT NULL DEFAULT 0,
   error TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -98,10 +104,12 @@ CREATE TABLE IF NOT EXISTS agents (
   role TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'starting',
   vm_id TEXT,
+  provider TEXT,
   depth INTEGER NOT NULL DEFAULT 0,
   last_heartbeat TIMESTAMPTZ,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  stopped_at TIMESTAMPTZ
+  stopped_at TIMESTAMPTZ,
+  accounted_through TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS agents_run_idx ON agents (run_id, status);
 
@@ -160,18 +168,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS connections_user_provider_idx ON connections (
 CREATE TABLE IF NOT EXISTS schedules (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
   cron TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
   goal TEXT NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT true,
   last_run_at TIMESTAMPTZ,
+  last_scheduled_at TIMESTAMPTZ,
+  last_skipped_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_error TEXT,
   next_run_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS schedules_next_idx ON schedules (enabled, next_run_at);
+
+CREATE TABLE IF NOT EXISTS usage_ledger (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  usd_micros BIGINT NOT NULL DEFAULT 0,
+  cost_status TEXT NOT NULL DEFAULT 'unavailable',
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS usage_ledger_job_period_idx
+  ON usage_ledger (job_id, kind, period_end);
+CREATE INDEX IF NOT EXISTS usage_ledger_run_idx ON usage_ledger (run_id, created_at);
 `;
 
 /** Every table, in dependency order for TRUNCATE. */
 export const TABLES = [
-  "events", "artifacts", "agents", "jobs", "runs", "messages", "threads",
+  "events", "artifacts", "usage_ledger", "agents", "jobs", "runs", "messages", "threads",
   "schedules", "projects", "connections", "secrets", "users",
 ] as const;

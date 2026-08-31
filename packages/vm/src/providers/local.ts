@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname, resolve, relative, isAbsolute } from "node:path";
+import { join, dirname, resolve, relative, isAbsolute, basename } from "node:path";
 import type {
-  ExecOptions, ExecResult, LogChunk, Vm, VmProvider, VmSpec,
+  ExecOptions, ExecResult, LogChunk, ManagedVm, Vm, VmProvider, VmSpec,
 } from "../types.ts";
 import { VmError } from "../types.ts";
 
@@ -23,6 +23,7 @@ export class LocalProvider implements VmProvider {
   #env = new Map<string, Record<string, string>>();
   /** PIDs started by spawnDetached, so destroy() does not leave them running. */
   #detached = new Map<string, number[]>();
+  #stateDir = process.env.KAPI_LOCAL_STATE_DIR ?? join(tmpdir(), "kapi-local-state");
 
   async isAvailable() {
     return true;
@@ -34,9 +35,10 @@ export class LocalProvider implements VmProvider {
     const workdir = join(root, "workspace");
     await mkdir(workdir, { recursive: true });
 
-    const box: Vm = { id: root, provider: this.name, workdir, createdAt: Date.now() };
+    const box: Vm = { id: root, provider: this.name, workdir, createdAt: Date.now(), metadata: spec.metadata };
     this.#boxes.set(root, box);
     this.#env.set(root, spec.env ?? {});
+    await this.#writeManifest(box, []);
     return box;
   }
 
@@ -173,6 +175,7 @@ export class LocalProvider implements VmProvider {
       detached: true,
     });
     this.#detached.set(id, [...(this.#detached.get(id) ?? []), child.pid ?? 0]);
+    await this.#writeManifest(box, this.#detached.get(id) ?? []);
     child.unref();
   }
 
@@ -199,6 +202,52 @@ export class LocalProvider implements VmProvider {
     await rm(box.id, { recursive: true, force: true });
     this.#boxes.delete(id);
     this.#env.delete(id);
+    await rm(this.#manifestPath(id), { force: true });
+  }
+
+  async destroyOrphan(id: string) {
+    const manifest = await this.#readManifest(this.#manifestPath(id)).catch(() => null);
+    if (!manifest?.managed || manifest.id !== id) return false;
+    for (const pid of manifest.pids ?? []) {
+      try { if (pid) process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
+      try { if (pid) process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    await rm(id, { recursive: true, force: true });
+    await rm(this.#manifestPath(id), { force: true });
+    return true;
+  }
+
+  async listManaged(): Promise<ManagedVm[]> {
+    await mkdir(this.#stateDir, { recursive: true });
+    const files = await readdir(this.#stateDir).catch(() => []);
+    const result: ManagedVm[] = [];
+    for (const file of files.filter((f) => f.endsWith(".json"))) {
+      const manifest = await this.#readManifest(join(this.#stateDir, file)).catch(() => null);
+      if (!manifest?.managed) continue;
+      result.push({
+        id: manifest.id, provider: this.name, workdir: manifest.workdir,
+        createdAt: manifest.createdAt, metadata: manifest.metadata,
+        managed: true, name: basename(manifest.id), status: "local",
+      });
+    }
+    return result;
+  }
+
+  #manifestPath(id: string) { return join(this.#stateDir, `${basename(id)}.json`); }
+
+  async #writeManifest(box: Vm, pids: number[]) {
+    await mkdir(this.#stateDir, { recursive: true });
+    await writeFile(this.#manifestPath(box.id), JSON.stringify({
+      managed: true, id: box.id, workdir: box.workdir, createdAt: box.createdAt,
+      metadata: box.metadata ?? {}, pids,
+    }), "utf8");
+  }
+
+  async #readManifest(path: string): Promise<{
+    managed: boolean; id: string; workdir: string; createdAt: number;
+    metadata: Record<string, string>; pids: number[];
+  }> {
+    return JSON.parse(await readFile(path, "utf8"));
   }
 
   async destroyAll() {

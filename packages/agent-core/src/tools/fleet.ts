@@ -1,4 +1,4 @@
-import type { AgentChild, SpawnRequest } from "@kapi/protocol";
+import type { AgentChild, AgentInboxMessage, SpawnRequest } from "@kapi/protocol";
 import type { AgentTool, FleetOps, ToolContext } from "../types.ts";
 
 /**
@@ -210,20 +210,98 @@ export const spawnAgentsTool: AgentTool = {
   },
 };
 
+/**
+ * The two kinds of thing that arrive in an agent's inbox, and what to do about
+ * each.
+ *
+ * A worker's question blocks that worker until it is answered. A system notice
+ * - a completed CI check - cannot be answered at all; the response is to spawn,
+ * cancel, or ignore. Rendering both as "questions" produced a captain that
+ * replied to `orchestrator`, an address nothing consumes, and burned a turn
+ * doing it every time a check completed.
+ */
+type Inbox = { questions: AgentInboxMessage[]; notices: AgentInboxMessage[] };
+
+/** GitHub conclusions that mean nobody is blocked. */
+const CI_OK = new Set(["success", "neutral", "skipped"]);
+
+const isCiFailure = (m: AgentInboxMessage): boolean =>
+  m.kind === "ci.completed" && !CI_OK.has(String(m.payload?.conclusion ?? ""));
+
+/**
+ * Drains the inbox into its two buckets.
+ *
+ * `pollInbox` advances a cursor shared by every tool on this agent, so whoever
+ * polls has CONSUMED these messages - a tool that drains without rendering
+ * silently destroys a blocked worker's question. Every caller of this function
+ * must render what it returns.
+ */
+async function drainInbox(fleet: FleetOps): Promise<Inbox> {
+  const inbox: Inbox = { questions: [], notices: [] };
+  for (const m of await fleet.pollInbox()) {
+    // `agent.message` is the only kind an agent can author into another's
+    // inbox - the plane stamps `from` from the job token - so everything else
+    // came from the orchestrator and cannot be replied to.
+    (m.kind === "agent.message" ? inbox.questions : inbox.notices).push(m);
+  }
+  return inbox;
+}
+
+const describeNotice = (m: AgentInboxMessage): string => {
+  if (m.kind !== "ci.completed") return `${m.from}: ${m.content}`;
+  const p = m.payload ?? {};
+  const name = String(p.name ?? "GitHub check");
+  const conclusion = String(p.conclusion ?? "completed");
+  const branch = p.branch ? ` on ${String(p.branch)}` : "";
+  const url = p.url ? ` ${String(p.url)}` : "";
+  return `CI ${name}: ${conclusion}${branch}${url}`;
+};
+
+/** Renders both buckets, each saying what the captain can actually do about it. */
+function renderInbox(inbox: Inbox): string[] {
+  const parts: string[] = [];
+  if (inbox.questions.length > 0) {
+    parts.push(
+      "Questions waiting for you - each of these workers is blocked until you " +
+      "answer with reply_to_agent, using the job id shown:\n" +
+      inbox.questions.map((m) => `  ${m.from}: ${m.content}`).join("\n"),
+    );
+  }
+  if (inbox.notices.length > 0) {
+    parts.push(
+      "System notices - information only. You cannot reply to these; act on one " +
+      "by spawning an agent, cancelling work it invalidates, or ignoring it:\n" +
+      inbox.notices.map((m) => `  ${describeNotice(m)}`).join("\n"),
+    );
+  }
+  return parts;
+}
+
 /** A snapshot, without waiting. Cheap enough to call between other work. */
 export const checkAgentsTool: AgentTool = {
   name: "check_agents",
   description:
     "Show every agent you have started and its current state, without waiting. " +
-    "Use this to decide whether to spawn more work while others are still running.",
+    "Use this to decide whether to spawn more work while others are still running. " +
+    "Also delivers anything waiting for you: questions from workers, and system " +
+    "notices such as completed CI checks.",
   inputSchema: { type: "object", properties: {} },
   async run(_input, ctx) {
     const fleet = fleetOf(ctx);
     if (!fleet) return { ok: false, output: NO_FLEET };
     const { children, pending } = await fleet.children();
+    // Drains the inbox too. Only wait_for_agents used to poll, so a CI result
+    // that landed while the captain was spawning and checking stayed invisible
+    // until the next wait - and was never seen at all by a captain that
+    // finished without waiting again.
+    const inbox = await drainInbox(fleet);
+    const parts = [render(children), `${pending} still running.`, ...renderInbox(inbox)];
     return {
-      output: `${render(children)}\n\n${pending} still running.`,
-      meta: { pending, total: children.length },
+      output: parts.join("\n\n"),
+      meta: {
+        pending, total: children.length,
+        questions: inbox.questions.length, notices: inbox.notices.length,
+      },
     };
   },
 };
@@ -238,13 +316,18 @@ export const checkAgentsTool: AgentTool = {
  * Questions from workers are surfaced here too. A worker that calls
  * `ask_captain` while its captain sits in a wait would otherwise time out
  * against a captain that was technically available the whole time.
+ *
+ * System notices - CI results - are surfaced separately, because they demand
+ * the opposite response: nobody is blocked on them and they cannot be replied
+ * to. Only a FAILING check ends the wait early.
  */
 export const waitForAgentsTool: AgentTool = {
   name: "wait_for_agents",
   description:
     "Wait until the agents you started have finished, then return their results. " +
     "Returns early if they all finish, and returns what it has if the wait runs out. " +
-    "Any question a worker asked you comes back here too.",
+    "Also returns early when a worker asks you a question or a CI check fails, " +
+    "since both are worth acting on immediately.",
   inputSchema: {
     type: "object",
     properties: {
@@ -274,7 +357,7 @@ export const waitForAgentsTool: AgentTool = {
       ch.status === "succeeded" || ch.status === "failed" || ch.status === "cancelled";
 
     const started = Date.now();
-    const questions: string[] = [];
+    const inbox: Inbox = { questions: [], notices: [] };
     let children: AgentChild[] = [];
     let stopped = "";
 
@@ -286,9 +369,9 @@ export const waitForAgentsTool: AgentTool = {
         ? snapshot.children.filter((ch) => want.has(ch.jobId))
         : snapshot.children;
 
-      for (const m of await fleet.pollInbox()) {
-        questions.push(`${m.from}: ${m.content}`);
-      }
+      const drained = await drainInbox(fleet);
+      inbox.questions.push(...drained.questions);
+      inbox.notices.push(...drained.notices);
 
       const outstanding = children.filter((ch) => !isDone(ch));
       if (children.length > 0 && outstanding.length === 0) break;
@@ -298,7 +381,19 @@ export const waitForAgentsTool: AgentTool = {
       }
       // A question answered late is a worker that already guessed. Hand it back
       // straight away so the captain can reply on its next turn.
-      if (questions.length > 0) { stopped = "A worker is waiting on an answer from you."; break; }
+      if (inbox.questions.length > 0) {
+        stopped = "A worker is waiting on an answer from you.";
+        break;
+      }
+      // A red check is actionable now - spawn a fixer naming it, or cancel what
+      // depended on it - and making the captain sit out a ten-minute wait to
+      // learn that is the same mistake at a different altitude. A green check
+      // blocks nobody, so it rides along and is rendered when the wait ends for
+      // some other reason.
+      if (drained.notices.some(isCiFailure)) {
+        stopped = "A CI check failed on one of your agents' branches.";
+        break;
+      }
       if (ctx.alive && !ctx.alive()) { stopped = "This job is no longer live; stopping."; break; }
       if (Date.now() - started >= timeoutMs) {
         stopped = `Still running after ${Math.round(timeoutMs / 1000)}s.`;
@@ -307,13 +402,7 @@ export const waitForAgentsTool: AgentTool = {
       await new Promise((r) => setTimeout(r, 5_000));
     }
 
-    const parts = [render(children)];
-    if (questions.length > 0) {
-      parts.push(
-        `Questions waiting for you (answer with reply_to_agent):\n` +
-        questions.map((q) => `  ${q}`).join("\n"),
-      );
-    }
+    const parts = [render(children), ...renderInbox(inbox)];
     if (stopped) parts.push(stopped);
 
     return {
@@ -347,6 +436,19 @@ export const replyToAgentTool: AgentTool = {
     const jobId = String(input.job_id ?? "").trim();
     const answer = String(input.answer ?? "").trim();
     if (!jobId || !answer) return { ok: false, output: "Both job_id and answer are required." };
+
+    // A system notice has no author to answer. Prefixing one of these produces
+    // `agent:orchestrator`, an address the protocol rejects and nothing
+    // consumes - the reply vanishes and the captain believes it responded.
+    if (["orchestrator", "captain", "broadcast"].includes(jobId)) {
+      return {
+        ok: false,
+        output:
+          `"${jobId}" is not a worker, so there is nobody to answer. System notices ` +
+          `such as CI results cannot be replied to - act on one by spawning an agent, ` +
+          `cancelling work it invalidates, or ignoring it.`,
+      };
+    }
 
     // Addresses are `agent:<jobId>`; accept either form, since a captain
     // reading the event stream sees the prefixed one.

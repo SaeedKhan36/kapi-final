@@ -1,7 +1,7 @@
 import {
   AgentIdSchema, AgentRoleSchema, agentId, jobIdOf, newId,
   JobSpecSchema, JobResultSchema, JobStatusSchema, isJobTerminal, isJobLeased,
-  AgentEventSchema, EventKindSchema,
+  AgentEventSchema, EventKindSchema, AgentInboxMessageSchema,
   ReviewVerdictSchema, normaliseVerdict, blockingFindings, renderChangeRequest,
 } from "@kapi/protocol";
 import { assert, equal, group, report, test } from "./harness.ts";
@@ -89,6 +89,28 @@ await test("AgentEvent requires a run-scoped sequence", () => {
     id: "ev_1", runId: "run_1", seq: -1, kind: "log", from: "orchestrator",
     ts: new Date().toISOString(),
   }).success, "negative seq rejected");
+});
+
+await test("an unlabelled inbox message is read as a worker's question", () => {
+  // An agent bundle built before `kind` existed sends none. Defaulting to the
+  // question side costs a wasted turn; defaulting the other way would strand a
+  // worker waiting for an answer that never comes.
+  const legacy = AgentInboxMessageSchema.parse({
+    seq: 4, from: "agent:job_1", content: "which branch?",
+  });
+  equal(legacy.kind, "agent.message", "the safe default");
+
+  const ci = AgentInboxMessageSchema.parse({
+    seq: 5, from: "orchestrator", kind: "ci.completed", content: "checks done",
+  });
+  equal(ci.kind, "ci.completed", "and a labelled one keeps its kind");
+
+  assert(
+    !AgentInboxMessageSchema.safeParse({
+      seq: 6, from: "orchestrator", kind: "not.a.kind", content: "x",
+    }).success,
+    "an unknown kind is rejected rather than silently bucketed",
+  );
 });
 
 await test("every EventKind is namespaced or a bare noun", () => {

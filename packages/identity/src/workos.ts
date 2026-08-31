@@ -33,6 +33,12 @@ export type WorkOSUser = {
   organizationId?: string;
 };
 
+export type WorkOSSession = {
+  accessToken: string;
+  refreshToken?: string;
+  user?: WorkOSUser;
+};
+
 /**
  * AuthKit signs with one of two issuers depending on how the session was
  * established, and both are legitimate for the same client - accepting only
@@ -113,6 +119,47 @@ export class WorkOSAuth {
       id: user.id,
       email: user.email,
       name: [user.first_name, user.last_name].filter(Boolean).join(" ") || undefined,
+    };
+  }
+
+  authorizationUrl(input: { redirectUri: string; state: string }): string {
+    const url = new URL(`${WORKOS_API}/user_management/authorize`);
+    url.searchParams.set("client_id", this.config.clientId);
+    url.searchParams.set("redirect_uri", input.redirectUri);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("provider", "authkit");
+    url.searchParams.set("state", input.state);
+    return url.toString();
+  }
+
+  async authenticateWithCode(code: string, redirectUri: string): Promise<WorkOSSession> {
+    return this.#session({
+      grant_type: "authorization_code", code, redirect_uri: redirectUri,
+      client_id: this.config.clientId, client_secret: this.config.apiKey,
+    });
+  }
+
+  async refreshSession(refreshToken: string): Promise<WorkOSSession> {
+    return this.#session({
+      grant_type: "refresh_token", refresh_token: refreshToken,
+      client_id: this.config.clientId, client_secret: this.config.apiKey,
+    });
+  }
+
+  async #session(body: Record<string, string>): Promise<WorkOSSession> {
+    const result = await this.#api<{
+      access_token?: string; refresh_token?: string; user?: {
+        id: string; email?: string; first_name?: string; last_name?: string;
+      };
+    }>("/user_management/authenticate", { method: "POST", body: JSON.stringify(body) });
+    if (!result.access_token) throw new WorkOSError("WorkOS did not return an access token", 502);
+    return {
+      accessToken: result.access_token,
+      refreshToken: result.refresh_token,
+      user: result.user ? {
+        id: result.user.id, email: result.user.email,
+        name: [result.user.first_name, result.user.last_name].filter(Boolean).join(" ") || undefined,
+      } : undefined,
     };
   }
 

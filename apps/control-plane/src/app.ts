@@ -1,17 +1,25 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { DbHandle } from "@kapi/db";
 import {
   Authenticator, WorkOSError, deleteSecret, listSecrets, putSecret,
-  vaultConfigured, type Principal, type SecretScope,
+  readAppConfig, vaultConfigured, type Principal, type SecretScope,
 } from "@kapi/identity";
-import { appendEvent, cancelSubtree, enqueue, getJob, listJobs } from "@kapi/queue";
+import { appendEvent, cancelSubtree, getJob, listJobs } from "@kapi/queue";
 import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
 import { createAgentApi } from "./agent-api.ts";
 import { createConnectionRoutes } from "./connections.ts";
 import { createGithubWebhookRoutes } from "./github-webhook.ts";
+import { RunService } from "./run-service.ts";
+import { Scheduler } from "./scheduler.ts";
+import { createWebAuthRoutes } from "./web-auth.ts";
+import { allowedOrigins } from "./config.ts";
+import { log } from "./log.ts";
+import type { RequestTracker } from "./request-tracker.ts";
 
 type Env = { Variables: { principal: Principal } };
 
@@ -29,6 +37,15 @@ const PostMessage = z.object({
   budgets: z.record(z.number().int().positive()).optional(),
 });
 
+const ScheduleBody = z.object({
+  name: z.string().min(1).max(120),
+  cron: z.string().min(1).max(120),
+  timezone: z.string().min(1).max(100),
+  goal: z.string().min(1).max(20_000),
+  enabled: z.boolean().optional(),
+});
+const SchedulePatch = ScheduleBody.partial().refine((v) => Object.keys(v).length > 0);
+
 const PutSecret = z.object({
   scope: z.enum(["user", "project", "task"]),
   scopeId: z.string().min(1),
@@ -42,11 +59,51 @@ export function createApp(deps: {
   hub: EventHub;
   auth: Authenticator;
   vmProvider?: string;
+  runService?: RunService;
+  scheduler?: Scheduler;
+  requests?: RequestTracker;
 }) {
   const { handle, store, hub, auth } = deps;
+  const runService = deps.runService ?? new RunService(handle, store, hub);
+  const scheduler = deps.scheduler ?? new Scheduler(handle, store, runService);
   const app = new Hono<Env>();
+  const origins = allowedOrigins();
+  const rate = new Map<string, { at: number; count: number }>();
 
-  app.use("/api/*", cors());
+  app.use("*", async (_c, next) => {
+    const leave = deps.requests?.enter();
+    try { await next(); } finally { leave?.(); }
+  });
+  app.use("*", secureHeaders());
+  app.use("*", bodyLimit({ maxSize: Number(process.env.KAPI_MAX_BODY_BYTES ?? 2 * 1024 * 1024),
+    onError: (c) => c.json({ error: "request body too large" }, 413) }));
+  const browserCors = cors({
+    origin: (origin) => origins.includes(origin) ? origin : "",
+    credentials: true,
+  });
+  app.use("/api/*", browserCors);
+  app.use("/auth/*", browserCors);
+  app.use("/api/*", async (c, next) => {
+    const now = Date.now();
+    const key = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+    const current = rate.get(key);
+    const window = !current || now - current.at >= 60_000 ? { at: now, count: 0 } : current;
+    window.count++; rate.set(key, window);
+    if (window.count > Number(process.env.KAPI_RATE_LIMIT_PER_MINUTE ?? 300)) {
+      return c.json({ error: "rate limit exceeded" }, 429);
+    }
+    const requestId = c.req.header("x-request-id") ?? crypto.randomUUID();
+    c.header("x-request-id", requestId);
+    const started = Date.now();
+    await next();
+    const runId = c.req.path.match(/^\/api\/runs\/([^/]+)/)?.[1];
+    const jobId = c.req.path.match(/^\/api\/jobs\/([^/]+)/)?.[1];
+    log("info", "http.request", { requestId, method: c.req.method,
+      path: c.req.path, status: c.res.status, durationMs: Date.now() - started,
+      ...(runId ? { runId } : {}), ...(jobId ? { jobId } : {}) });
+  });
+
+  app.route("/", createWebAuthRoutes(auth));
 
   // GitHub authenticates this route with its webhook signature, not with a
   // browser session. It must be mounted before the /api WorkOS middleware.
@@ -74,13 +131,51 @@ export function createApp(deps: {
       vmProvider: deps.vmProvider ?? "none",
     });
   });
+  app.get("/live", (c) => c.json({ ok: true }));
+  app.get("/ready", async (c) => {
+    try {
+      await handle.raw(`SELECT 1`);
+      return c.json({ ok: true, database: true, auth: auth.mode, vault: vaultConfigured(),
+        githubApp: Boolean(readAppConfig()),
+        operations: process.env.KAPI_OPERATIONS === "off" ? "external-worker" : "in-process",
+        vmProvider: deps.vmProvider ?? "none" });
+    } catch (err) { return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 503); }
+  });
+
+  app.get("/metrics", async (c) => {
+    const required = process.env.KAPI_METRICS_TOKEN;
+    if (required && c.req.header("authorization") !== `Bearer ${required}`) return c.text("unauthorized\n", 401);
+    const rows = await handle.raw<{
+      queued: number; leased: number; dead: number; active_vms: number; scheduler_lag: number;
+      vm_seconds: number; budget_exhaustions: number;
+    }>(`SELECT
+      (SELECT count(*)::int FROM jobs WHERE status='queued') queued,
+      (SELECT count(*)::int FROM jobs WHERE status IN ('claimed','running')) leased,
+      (SELECT count(*)::int FROM jobs WHERE status='failed') dead,
+      (SELECT count(*)::int FROM agents WHERE stopped_at IS NULL) active_vms,
+      (SELECT COALESCE(sum(vm_seconds),0)::int FROM runs) vm_seconds,
+      (SELECT count(*)::int FROM events WHERE kind='agent.message' AND payload->>'type'='budget.exhausted') budget_exhaustions,
+      (SELECT COALESCE(EXTRACT(EPOCH FROM now()-min(next_run_at)),0)::int FROM schedules
+        WHERE enabled=true AND deleted_at IS NULL AND next_run_at < now()) scheduler_lag`);
+    const m = rows[0] ?? { queued: 0, leased: 0, dead: 0, active_vms: 0, scheduler_lag: 0,
+      vm_seconds: 0, budget_exhaustions: 0 };
+    return c.text([
+      `kapi_queue_queued ${m.queued}`, `kapi_queue_leased ${m.leased}`,
+      `kapi_jobs_failed_total ${m.dead}`, `kapi_vms_active ${m.active_vms}`,
+      `kapi_scheduler_lag_seconds ${m.scheduler_lag}`, "",
+      `kapi_vm_seconds_total ${m.vm_seconds}`,
+      `kapi_budget_exhaustions_total ${m.budget_exhaustions}`, "",
+    ].join("\n"), 200, { "content-type": "text/plain; version=0.0.4" });
+  });
 
   /* ---------------------------------------------------------------- auth */
 
   app.use("/api/*", async (c, next) => {
     if (c.req.path === "/api/health") return next();
     try {
-      c.set("principal", await auth.authenticate(c.req.header("authorization")));
+      c.set("principal", await auth.authenticate(
+        c.req.header("authorization"), c.req.header("cookie"),
+      ));
     } catch (err) {
       const status = err instanceof WorkOSError ? err.status : 401;
       const message = err instanceof Error ? err.message : "unauthenticated";
@@ -153,44 +248,47 @@ export function createApp(deps: {
     const { thread, project } = found;
     const goal = parsed.data.content;
 
-    const run = await store.createRun({
-      threadId: thread.id,
-      projectId: project.id,
-      goal,
-      budgets: { ...project.budgets, ...parsed.data.budgets },
+    const started = await runService.start({
+      thread, project, goal, budgets: parsed.data.budgets, messageRole: "user",
     });
+    return c.json(started, 202);
+  });
 
-    const message = await store.createMessage({
-      threadId: thread.id, role: "user", content: goal, runId: run.id,
-    });
+  /* ----------------------------------------------------------- schedules */
 
-    const job = await enqueue(handle, {
-      runId: run.id,
-      parentJobId: null,
-      kind: "captain",
-      role: "captain",
-      instruction: goal,
-      acceptance: [],
-      touches: [],
-      dependsOn: [],
-      priority: 10,
-      maxAttempts: 3,
-      context: {
-        repoUrl: project.repoUrl,
-        baseBranch: project.defaultBranch,
-        threadId: thread.id,
-        projectId: project.id,
-      },
-    });
+  app.get("/api/projects/:id/schedules", async (c) => {
+    const project = await store.getProject(c.req.param("id"), c.get("principal").userId);
+    if (!project) return c.json({ error: "project not found" }, 404);
+    return c.json(await scheduler.list(project.id));
+  });
 
-    // The hub polls, but a caller that opened a socket first should see these
-    // immediately rather than up to a poll interval later.
-    for (const e of await store.listEvents(run.id, 0)) hub.publish(e);
+  app.post("/api/projects/:id/schedules", async (c) => {
+    const project = await store.getProject(c.req.param("id"), c.get("principal").userId);
+    if (!project) return c.json({ error: "project not found" }, 404);
+    const parsed = ScheduleBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "invalid request", issues: parsed.error.issues }, 400);
+    try { return c.json(await scheduler.create(project, parsed.data), 201); }
+    catch (err) { return c.json({ error: err instanceof Error ? err.message : String(err) }, 400); }
+  });
 
-    // Re-read: enqueue bumped the run's spawn and event counters, and returning
-    // the pre-enqueue snapshot would show a run with one job and zero spawns.
-    const fresh = (await store.getRun(run.id)) ?? run;
-    return c.json({ message, run: fresh, job }, 202);
+  app.patch("/api/schedules/:id", async (c) => {
+    const parsed = SchedulePatch.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "invalid request", issues: parsed.error.issues }, 400);
+    try {
+      const schedule = await scheduler.update(c.req.param("id"), c.get("principal").userId, parsed.data);
+      return schedule ? c.json(schedule) : c.json({ error: "schedule not found" }, 404);
+    } catch (err) { return c.json({ error: err instanceof Error ? err.message : String(err) }, 400); }
+  });
+
+  app.delete("/api/schedules/:id", async (c) =>
+    (await scheduler.remove(c.req.param("id"), c.get("principal").userId))
+      ? c.body(null, 204) : c.json({ error: "schedule not found" }, 404));
+
+  app.post("/api/schedules/:id/run", async (c) => {
+    const result = await scheduler.runNow(c.req.param("id"), c.get("principal").userId);
+    if (!result) return c.json({ error: "schedule not found" }, 404);
+    if (result.skipped) return c.json({ error: "schedule already has an active run", skipped: true }, 409);
+    return c.json(result.run, 202);
   });
 
   /* ---------------------------------------------------------------- runs */
@@ -227,6 +325,10 @@ export function createApp(deps: {
     const roots = jobs.filter((j) => j.parentJobId === null);
     const cancelled = (await Promise.all(roots.map((r) => cancelSubtree(handle, r.id, "cancelled by user")))).flat();
     await store.setRunStatus(id, "cancelled");
+    await handle.raw(
+      `UPDATE schedules s SET last_status='cancelled', updated_at=now()
+       FROM runs r WHERE r.id=$1 AND r.schedule_id=s.id`, [id],
+    );
     // One run-level event, so a watching browser does not have to infer the
     // run's fate from which of N job cancellations happened to be the root's.
     await handle.transaction(async (tx) => {

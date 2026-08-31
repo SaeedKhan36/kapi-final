@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RunEvent, StreamFrame } from "./types.ts";
+import { apiBase } from "./api.ts";
 
 /**
  * The live run feed, resumed from a cursor.
@@ -36,8 +37,8 @@ export function useRunStream(
 
     const connect = () => {
       if (closed) return;
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const url = `${proto}://${location.host}/ws` +
+      const httpBase = apiBase || location.origin;
+      const url = `${httpBase.replace(/^http/, "ws")}/ws` +
         `?runId=${encodeURIComponent(runId)}&cursor=${cursor.current}`;
       socket = new WebSocket(url);
 

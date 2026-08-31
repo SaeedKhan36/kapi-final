@@ -38,10 +38,11 @@ export function createModelProxy(deps: { handle: DbHandle }) {
   async function context(runId: string): Promise<RunContext | null> {
     const rows = await handle.raw<{
       run_id: string; project_id: string; owner_id: string;
-      llm_requests: number; llm_tokens: number; max_tokens: number; status: string;
+      llm_requests: number; llm_tokens: number; max_llm_requests: number;
+      max_tokens: number; status: string;
     }>(
       `SELECT r.id AS run_id, r.project_id, p.owner_id,
-              r.llm_requests, r.llm_tokens, r.max_tokens, r.status
+              r.llm_requests, r.llm_tokens, r.max_llm_requests, r.max_tokens, r.status
        FROM runs r JOIN projects p ON p.id = r.project_id WHERE r.id = $1`,
       [runId],
     );
@@ -53,7 +54,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       userId: row.owner_id,
       llmRequests: Number(row.llm_requests),
       llmTokens: Number(row.llm_tokens),
-      maxRequests: Number(process.env.KAPI_MAX_LLM_REQUESTS ?? 2000),
+      maxRequests: Number(row.max_llm_requests),
       maxTokens: Number(row.max_tokens),
     };
   }
@@ -92,6 +93,17 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         },
         429,
       );
+    }
+
+    // Reserve the request atomically. Many agents can call at once; a read then
+    // increment would let all of them cross the same final-request boundary.
+    const reserved = await handle.raw<{ llm_requests: number }>(
+      `UPDATE runs SET llm_requests=llm_requests+1
+       WHERE id=$1 AND llm_requests < max_llm_requests AND llm_tokens < max_tokens
+       RETURNING llm_requests`, [runId],
+    );
+    if (reserved.length === 0) {
+      return c.json({ error: "run model budget exhausted", budgetExhausted: true }, 429);
     }
 
     const tools: ToolSet = {};
@@ -133,8 +145,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         totalTokens: result.usage?.totalTokens ?? 0,
       };
       await handle.raw(
-        `UPDATE runs SET llm_requests = llm_requests + 1, llm_tokens = llm_tokens + $2
-         WHERE id = $1`,
+        `UPDATE runs SET llm_tokens = llm_tokens + $2 WHERE id = $1`,
         [runId, usage.totalTokens],
       );
 
@@ -151,7 +162,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         usage,
         provider: result.provider,
         modelId: result.modelId,
-        budgetExhausted: ctx.llmRequests + 1 >= ctx.maxRequests,
+        budgetExhausted: Number(reserved[0]!.llm_requests) >= ctx.maxRequests,
       };
       return c.json(response);
     } catch (err) {

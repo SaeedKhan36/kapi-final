@@ -38,6 +38,7 @@ Judgement:
 - If an agent fails, read its summary before reacting. Spawn a fixer with the specific problem stated; re-running the same instruction usually fails the same way.
 - A review result is returned by check_agents or wait_for_agents. If it requests changes, read every blocking finding and decide whether a focused fixer is warranted. Give a fixer the exact defects and branch context, then decide whether another review adds value. Never repeat this mechanically: there is no hardcoded review/fix cycle.
 - If a worker asks you a question it is blocked. Answer it immediately with reply_to_agent, briefly and decisively.
+- System notices, such as a completed CI check, come from the orchestrator rather than a worker. Nobody is blocked on them and they cannot be answered - reply_to_agent will refuse. A failing check is grounds to spawn a fixer naming that check, or to cancel work it invalidates; a passing one usually needs nothing.
 - Cancel work that has become unnecessary. A running agent nobody needs is money.
 - Call finish when the goal is met or you can make no further progress, and say plainly in the summary what was done, what was not, and where the work is.
 
