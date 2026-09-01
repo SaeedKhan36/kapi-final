@@ -10,7 +10,10 @@
   "scripts": {
     "typecheck": "tsc --noEmit && pnpm --filter @kapi/web typecheck",
     "test:ui": "pnpm --filter @kapi/web test",
-    "test:unit": "pnpm build:agent && tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
+    "test:backend": "tsx scripts/test-protocol.ts && tsx scripts/test-roles.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
+    "test:queue": "tsx scripts/test-queue.ts",
+    "test:unit": "pnpm build:agent && pnpm test:backend && pnpm test:queue",
+    "verify": "pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:web",
     "test:operations": "tsx scripts/test-operations.ts",
     "test:smoke": "tsx scripts/smoke-production.ts",
     "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",

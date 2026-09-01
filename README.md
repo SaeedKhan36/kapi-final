@@ -22,7 +22,13 @@ frozen DAG: it decides what to spawn after seeing what came back. The only limit
 budgets, and a budget being reached is reported to the Captain as a tool result for it to
 reason about — never as a killed run.
 
-## Status: Phases 1–10 complete
+## Status: release-candidate engineering
+
+The adaptive fleet, queue, UI, setup flows and production operations primitives are
+implemented. Local and CI verification are defined; real staging integration evidence,
+deployment sign-off and production rollout remain separate gates and are not claimed by
+this document. See [ARCHITECTURE.md](./ARCHITECTURE.md),
+[DEVELOPMENT.md](./DEVELOPMENT.md), and [OPERATIONS.md](./OPERATIONS.md).
 
 The Captain is a live agent, not a plan. It explores a repository, then delegates by calling
 **`spawn_agents`** with as many workers as the work needs — no fixed count, no fixed order.
@@ -55,7 +61,7 @@ only the Captain decides whether to spawn a fixer or request another review.
 | `packages/llm` | Codex subscription routing on the Vercel AI SDK: OAuth and budgets |
 | `packages/vm` | `VmProvider`: local, docker, daytona |
 | `packages/protocol` | zod wire types — jobs, events, addressing, agent + model API, verdicts |
-| `packages/db` | Drizzle schema, dual Postgres/PGlite bootstrap, idempotent DDL |
+| `packages/db` | Drizzle schema, connect/verify path, advisory-locked bootstrap, PGlite |
 | `packages/queue` | the leased job queue: claim, heartbeat, complete, fail, reap, cancel |
 | `packages/identity` | WorkOS sessions, the AES-256-GCM vault, scoped job tokens |
 | `packages/env` | dependency-free `.env` loader that never clobbers real config |
@@ -107,8 +113,10 @@ curl -XPOST localhost:8787/api/threads/$TID/messages -H 'content-type: applicati
 |---|---|
 | `GET /api/health` | database, auth mode, vault status, queue depth |
 | `GET /api/me` | the authenticated principal |
+| `GET /api/setup` | safe auth, Codex, GitHub, vault and VM readiness metadata |
 | `GET·POST /api/projects` | list and create projects |
 | `GET /api/projects/:id` | one project with its threads and runs |
+| `GET /api/projects/:id/integrations` | repository-scoped GitHub App readiness |
 | `POST /api/projects/:id/threads` | open a thread |
 | `GET·POST /api/projects/:id/schedules` | list and create timezone-aware scheduled work |
 | `PATCH·DELETE /api/schedules/:id` | edit, pause/resume, or soft-delete a schedule |
@@ -119,6 +127,7 @@ curl -XPOST localhost:8787/api/threads/$TID/messages -H 'content-type: applicati
 | `GET /api/runs/:id/events?after=` | events after a sequence number |
 | `POST /api/runs/:id/cancel` | cancel the captain and everything it spawned |
 | `PUT·GET·DELETE /api/secrets` | vault — values go in, only names come back |
+| `GET·POST·DELETE /api/connections/codex/*` | connect and revoke a Codex subscription |
 | `POST /webhooks/github` | GitHub `check_run` / `check_suite` completions |
 | `WS /ws?runId=&cursor=` | live event stream, resumable from a cursor |
 
@@ -390,12 +399,15 @@ retrofitted:
 - **It had no queue.** The whole run lived in one in-process drain loop, so restarting the
   orchestrator killed the run.
 
-Both land on the same foundation, which is why it is Phase 0.
+Both failures are resolved by the same durable queue and live-Captain foundation.
 
 ## Testing
 
 ```bash
-pnpm test:unit      # 116 tests: protocol, queue, control plane, agent bootstrap, llm, agent-core, captain
+pnpm verify         # complete release-candidate gate
+pnpm test:backend   # protocol, roles, control plane, operations, VM, LLM and agent-core
+pnpm test:queue     # real-Postgres contention, leases and event consistency
+pnpm test:ui        # deterministic web component states
 pnpm typecheck
 pnpm dev:api        # builds the agent bundle, then runs the plane in watch mode
 pnpm build:agent    # bundle apps/agent to a single dist/agent.mjs
@@ -419,19 +431,16 @@ export DATABASE_URL=postgres://postgres:kapi@localhost:5432/postgres
 pnpm test:unit
 ```
 
-Requires Node 22+ and pnpm 10.
+The queue suite uses a unique disposable schema, so concurrent invocations never share a
+global `TRUNCATE` or claim each other's jobs. See [DEVELOPMENT.md](./DEVELOPMENT.md) for the
+fresh-clone and CI commands. Requires Node 22+ and pnpm 10.30.0.
 
-## Roadmap
+## Release gates
 
-1. ~~Control plane~~ — done
-2. ~~VM layer + agent bootstrap~~ — done
-3. ~~Models on the Vercel AI SDK~~ — done
-4. ~~`agent-core` loop + the Build agent~~ — done
-5. ~~Captain AI~~ — unbounded spawn, monitor, triage — done
-6. ~~GitHub App + CI check-runs~~ — repo-scoped installation tokens + streamed check results — done
-7. ~~Review agent + adaptive fail → fix loop~~ — structured verdicts, captain-directed fixes — done
-   (a run ends at an open pull request; **merging is a human's call**, and no agent can do it)
-8. ~~Web UI~~ — thread chat with the Captain, live agent tree resumed from a cursor — done
-9. ~~Scheduler, orphan-VM reaping, cost accounting~~ — dedicated schedule threads, audit-first reconciliation, hybrid budgets — done
-10. ~~Production hardening~~ — Render services, AuthKit cookies, websocket ownership, cross-replica notifications, metrics and runbooks — done
+- Implemented and locally verified: control plane, adaptive roles, queue recovery,
+  setup/workbench UI, scheduling, accounting, reconciliation and CI baseline.
+- Next: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence.
+- Then: Render staging, controlled production canaries/restore, and final GA hardening.
+
+A run ends at an open pull request. **Merging is always a human decision.**
 # kapi-final

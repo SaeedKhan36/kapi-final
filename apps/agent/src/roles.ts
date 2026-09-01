@@ -423,5 +423,9 @@ export const ROLES: Record<string, RoleHandler> = {
   review: reviewRole,
 };
 
-export const handlerFor = (kind: string): RoleHandler =>
-  process.env.KAPI_TEST_ECHO_ROLE === "true" ? echoRole : ROLES[kind] ?? echoRole;
+export const handlerFor = (kind: string): RoleHandler => {
+  if (process.env.KAPI_TEST_ECHO_ROLE === "true") return echoRole;
+  const handler = ROLES[kind];
+  if (!handler) throw new Error(`unsupported agent role kind: ${kind}`);
+  return handler;
+};

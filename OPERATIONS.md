@@ -7,6 +7,10 @@ and the static React UI. The API runs with `KAPI_OPERATIONS=off`; only the worke
 reaps, meters, reconciles, and provisions. All queue and scheduler claims are database-locked,
 so a temporary second worker remains safe during a rolling deploy.
 
+`pnpm db:migrate` runs as Render's API `preDeployCommand` and is the only production schema
+writer. API and worker startup call the connect/verify path: if the pre-deploy migration is
+missing they fail with an actionable readiness error instead of attempting DDL concurrently.
+
 Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
 `KAPI_ALLOWED_ORIGINS` to the final HTTPS service URLs. Configure the WorkOS callback as
 `$CONTROL_PLANE_PUBLIC_URL/auth/callback` and the GitHub webhook as

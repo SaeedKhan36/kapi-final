@@ -1,0 +1,64 @@
+name: Release candidate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kapi
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: kapi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kapi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:kapi@127.0.0.1:5432/kapi
+      KAPI_SECRET_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      KAPI_SESSION_SECRET: ci-session-secret-with-at-least-32-characters
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.0
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Apply migrations as the schema writer
+        run: NODE_ENV=production pnpm db:migrate
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Agent build
+        run: pnpm build:agent
+      - name: Backend tests
+        run: pnpm test:backend
+      - name: Queue concurrency
+        run: pnpm test:queue
+      - name: Web build
+        run: pnpm build:web
+      - name: Deterministic UI tests
+        run: pnpm test:ui
