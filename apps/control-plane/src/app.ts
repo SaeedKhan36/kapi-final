@@ -5,7 +5,7 @@ import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { DbHandle } from "@kapi/db";
 import {
-  Authenticator, WorkOSError, deleteSecret, listSecrets, putSecret,
+  Authenticator, GitHubApp, WorkOSError, deleteSecret, listSecrets, parseRepoUrl, putSecret,
   readAppConfig, vaultConfigured, type Principal, type SecretScope,
 } from "@kapi/identity";
 import { appendEvent, cancelSubtree, getJob, listJobs } from "@kapi/queue";
@@ -62,12 +62,17 @@ export function createApp(deps: {
   runService?: RunService;
   scheduler?: Scheduler;
   requests?: RequestTracker;
+  githubApp?: GitHubApp | null;
 }) {
   const { handle, store, hub, auth } = deps;
   const runService = deps.runService ?? new RunService(handle, store, hub);
   const scheduler = deps.scheduler ?? new Scheduler(handle, store, runService);
   const app = new Hono<Env>();
   const origins = allowedOrigins();
+  const githubConfig = readAppConfig();
+  const githubApp = deps.githubApp === undefined
+    ? (githubConfig ? new GitHubApp(githubConfig) : null)
+    : deps.githubApp;
   const rate = new Map<string, { at: number; count: number }>();
 
   app.use("*", async (_c, next) => {
@@ -189,6 +194,27 @@ export function createApp(deps: {
   // Mounted after the auth middleware: connecting an account is a user action.
   app.route("/", createConnectionRoutes({ handle }));
 
+  app.get("/api/setup", async (c) => {
+    const principal = c.get("principal");
+    const rows = await handle.raw<{
+      provider: string; status: string; external_id: string | null; updated_at: string;
+    }>(
+      `SELECT provider,status,external_id,updated_at FROM connections WHERE user_id=$1`,
+      [principal.userId],
+    );
+    const codex = rows.find((row) => row.provider === "codex");
+    return c.json({
+      auth: { mode: auth.mode, authenticated: principal.via === "workos" },
+      vault: { configured: vaultConfigured() },
+      vm: { provider: deps.vmProvider ?? "none" },
+      github: { configured: githubApp !== null },
+      codex: codex
+        ? { connected: codex.status === "active", status: codex.status,
+            accountId: codex.external_id, updatedAt: codex.updated_at }
+        : { connected: false, status: "missing", accountId: null, updatedAt: null },
+    });
+  });
+
   /* ------------------------------------------------------------ projects */
 
   app.get("/api/projects", async (c) =>
@@ -210,6 +236,33 @@ export function createApp(deps: {
       store.listThreads(project.id), store.listRuns(project.id),
     ]);
     return c.json({ project, threads, runs });
+  });
+
+  app.get("/api/projects/:id/integrations", async (c) => {
+    const project = await store.getProject(c.req.param("id"), c.get("principal").userId);
+    if (!project) return c.json({ error: "project not found" }, 404);
+    if (!githubApp) {
+      return c.json({ github: {
+        configured: false, installed: false, action: "configure",
+        reason: "Configure the Kapi GitHub App to push branches and open pull requests.",
+      } });
+    }
+    const ref = parseRepoUrl(project.repoUrl);
+    if (!ref) {
+      return c.json({ github: {
+        configured: true, installed: false, action: "configure",
+        reason: "This project repository is not a supported GitHub HTTPS URL.",
+      } });
+    }
+    try {
+      const status = await githubApp.installationStatus(ref);
+      return c.json({ github: { configured: true, ...status } });
+    } catch (err) {
+      return c.json({ github: {
+        configured: true, installed: false, action: "retry",
+        reason: err instanceof Error ? err.message : String(err),
+      } });
+    }
   });
 
   /* ------------------------------------------------------------- threads */

@@ -16,11 +16,28 @@ type Env = { Variables: { principal: Principal } };
  * credential-adjacent secret in the database for no benefit.
  */
 const PENDING_TTL_MS = 10 * 60 * 1000;
-const pending = new Map<string, { pkce: PkcePair; userId: string; redirectUri: string; at: number }>();
+const pending = new Map<string, {
+  pkce: PkcePair; userId: string; redirectUri: string; returnTo?: string; at: number;
+}>();
 
 function sweep() {
   const cutoff = Date.now() - PENDING_TTL_MS;
   for (const [state, entry] of pending) if (entry.at < cutoff) pending.delete(state);
+}
+
+/** Only the configured web application may receive an OAuth result. */
+function safeReturnTo(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const web = new URL(process.env.KAPI_WEB_URL ?? "http://localhost:3000");
+  const target = new URL(value, web);
+  if (target.origin !== web.origin) throw new Error("returnTo must use the configured KAPI_WEB_URL origin");
+  return target.toString();
+}
+
+function oauthRedirect(returnTo: string, status: "connected" | "error"): string {
+  const target = new URL(returnTo);
+  target.searchParams.set("codex", status);
+  return target.toString();
 }
 
 export function createConnectionRoutes(deps: { handle: DbHandle }) {
@@ -55,11 +72,20 @@ export function createConnectionRoutes(deps: { handle: DbHandle }) {
     const body = await c.req.json().catch(() => ({}));
     const base = process.env.CONTROL_PLANE_PUBLIC_URL
       ?? `http://localhost:${process.env.CONTROL_PLANE_PORT ?? 8787}`;
-    const redirectUri = (body as { redirectUri?: string }).redirectUri
+    const input = body as { redirectUri?: string; returnTo?: string };
+    const redirectUri = input.redirectUri
       ?? `${base}/api/connections/codex/callback`;
 
+    let returnTo: string | undefined;
+    try { returnTo = safeReturnTo(input.returnTo); }
+    catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+
     const pkce = createPkce();
-    pending.set(pkce.state, { pkce, userId: principal.userId, redirectUri, at: Date.now() });
+    pending.set(pkce.state, {
+      pkce, userId: principal.userId, redirectUri, ...(returnTo ? { returnTo } : {}), at: Date.now(),
+    });
     return c.json({ url: authorizationUrl(pkce, redirectUri), state: pkce.state });
   });
 
@@ -78,8 +104,10 @@ export function createConnectionRoutes(deps: { handle: DbHandle }) {
     try {
       const grant = await exchangeCode(code, entry.pkce.verifier, entry.redirectUri);
       await saveGrant(handle, entry.userId, grant);
+      if (entry.returnTo) return c.redirect(oauthRedirect(entry.returnTo, "connected"), 303);
       return c.json({ connected: true, accountId: grant.accountId ?? null });
     } catch (err) {
+      if (entry.returnTo) return c.redirect(oauthRedirect(entry.returnTo, "error"), 303);
       return c.json(
         {
           error: err instanceof Error ? err.message : String(err),

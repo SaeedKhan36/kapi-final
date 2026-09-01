@@ -66,7 +66,7 @@ function Branch(
           <span>{node.jobId}</span>
           {node.attempts > 1 && <Tag tone="warn">attempt {node.attempts}</Tag>}
           {node.branch && <Tag>{node.branch}</Tag>}
-          {node.prUrl && <Tag tone="accent">PR</Tag>}
+          {node.prUrl && <Tag tone="accent">PR ready</Tag>}
           {node.ci && (
             <Tag tone={node.ci.conclusion === "success" ? "ok" : "bad"}>
               ci: {node.ci.conclusion ?? "done"}

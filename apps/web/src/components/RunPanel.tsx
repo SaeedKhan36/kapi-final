@@ -18,6 +18,7 @@ export function RunPanel(
 ) {
   const [selected, setSelected] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const roots = useMemo(() => toTree(state), [state]);
   const counts = useMemo(() => countByStatus(state), [state]);
@@ -29,7 +30,7 @@ export function RunPanel(
     setSelected(roots[0]?.node.jobId ?? null);
   }, [roots, selected, state.nodes]);
 
-  useEffect(() => { setCancelling(false); }, [run?.id]);
+  useEffect(() => { setCancelling(false); setConfirmCancel(false); }, [run?.id]);
 
   if (!run) {
     return loading
@@ -41,7 +42,8 @@ export function RunPanel(
 
   return (
     <div className="space-y-3">
-      <Card className="p-4">
+      <Card className="overflow-hidden">
+        <div className="border-b border-line/50 px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge status={state.status} />
           <span className="font-mono text-[11px] text-muted">{run.id}</span>
@@ -52,29 +54,31 @@ export function RunPanel(
                 variant="danger"
                 className="px-2 py-1 text-xs"
                 disabled={cancelling}
-                onClick={() => { setCancelling(true); onCancel(); }}
+                onClick={() => {
+                  if (!confirmCancel) { setConfirmCancel(true); return; }
+                  setCancelling(true); onCancel();
+                }}
               >
-                {cancelling ? "cancelling…" : "Cancel run"}
+                {cancelling ? "cancelling…" : confirmCancel ? "Confirm cancel" : "Cancel run"}
               </Button>
             )}
           </div>
         </div>
 
-        <p className="mt-2 line-clamp-2 text-sm text-bright/90">{run.goal}</p>
+        <p className="mt-3 line-clamp-2 text-sm text-bright/90">{run.goal}</p>
         {run.error && <p className="mt-1 text-xs text-bad">{run.error}</p>}
+        </div>
 
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-muted">
+        <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          <BudgetMeter label="Model requests" used={run.llmRequests} max={run.maxLlmRequests} />
+          <BudgetMeter label="Tokens" used={run.llmTokens} max={run.maxTokens} />
+          <BudgetMeter label="Spawns" used={run.totalSpawns} max={run.maxTotalSpawns} />
+          <BudgetMeter label="VM time" used={run.vmSeconds} max={run.maxVmSeconds} suffix="s" />
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line/40 px-4 py-2.5 font-mono text-[10px] text-muted">
           <span>{state.order.length} agents</span>
           {Object.entries(counts).map(([status, n]) => <span key={status}>{status} {n}</span>)}
-          <span className="text-muted/70">
-            model {run.llmRequests}/{run.maxLlmRequests} requests · {run.llmTokens.toLocaleString()}/{run.maxTokens.toLocaleString()} tokens
-          </span>
-          <span className="text-muted/70">
-            spawns {run.totalSpawns}/{run.maxTotalSpawns} · depth ≤ {run.maxSpawnDepth}
-          </span>
-          <span className="text-muted/70">
-            VM {run.vmSeconds.toLocaleString()}/{run.maxVmSeconds.toLocaleString()}s
-          </span>
+          <span className="ml-auto text-muted/70">depth ≤ {run.maxSpawnDepth}</span>
           <span className="text-muted/70">
             cost {run.costStatus === "unavailable" ? "unavailable" : `$${(run.usdCents / 100).toFixed(2)}/${(run.maxUsdCents / 100).toFixed(2)}`} ({run.costStatus})
           </span>
@@ -94,4 +98,12 @@ export function RunPanel(
       </div>
     </div>
   );
+}
+
+export function BudgetMeter(
+  { label, used, max, suffix = "" }: { label: string; used: number; max: number; suffix?: string },
+) {
+  const ratio = max > 0 ? Math.min(1, Math.max(0, used / max)) : 0;
+  const tone = ratio >= .9 ? "bg-bad" : ratio >= .7 ? "bg-warn" : "bg-accent";
+  return <div><div className="flex items-baseline justify-between gap-2 text-[10px]"><span className="uppercase tracking-wider text-muted">{label}</span><span className="font-mono text-bright/80">{used.toLocaleString()}{suffix}/{max.toLocaleString()}{suffix}</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-ink/70"><div className={`h-full rounded-full ${tone}`} style={{ width: `${ratio * 100}%` }} /></div></div>;
 }

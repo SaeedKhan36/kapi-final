@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit && pnpm --filter @kapi/web typecheck",
+    "test:ui": "pnpm --filter @kapi/web test",
     "test:unit": "pnpm build:agent && tsx scripts/test-protocol.ts && tsx scripts/test-queue.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
     "test:operations": "tsx scripts/test-operations.ts",
     "test:smoke": "tsx scripts/smoke-production.ts",

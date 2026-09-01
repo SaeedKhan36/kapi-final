@@ -6,6 +6,7 @@ import { Link } from "~/router.tsx";
 import { Chat } from "~/components/Chat.tsx";
 import { RunPanel } from "~/components/RunPanel.tsx";
 import { ErrorNote, Spinner } from "~/components/ui.tsx";
+import { cn } from "~/lib/cn.ts";
 
 /**
  * A thread: the conversation on the left, the fleet it produced on the right.
@@ -22,6 +23,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [mobilePane, setMobilePane] = useState<"chat" | "fleet">("chat");
 
   const load = useCallback(async (): Promise<Message[]> => {
     const data = await api.getThread(threadId);
@@ -62,6 +64,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       setMessages((prev) => [...prev, message]);
       settled.current = null;
       setActiveRunId(started.id);
+      setMobilePane("fleet");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -74,27 +77,33 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <Link to={`/projects/${thread.project.id}`} className="text-sm font-medium hover:text-accent">
-          {thread.project.name}
-        </Link>
-        <span className="text-muted">/</span>
-        <span className="text-sm text-muted">{thread.thread.title ?? "thread"}</span>
-        <span className="font-mono text-[10px] text-muted">{thread.thread.id}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted">{thread.project.repoUrl}</span>
+      <header className="flex flex-wrap items-center gap-3 border-b border-line/50 pb-4">
+        <Link to={`/projects/${thread.project.id}`} className="text-muted transition-colors hover:text-accent" aria-label={`Back to ${thread.project.name}`}>←</Link>
+        <div className="min-w-0 flex-1">
+          <p className="eyebrow">Live engineering thread</p>
+          <div className="mt-1 flex min-w-0 items-baseline gap-2">
+            <h1 className="truncate text-lg font-semibold">{thread.thread.title ?? thread.project.name}</h1>
+            <span className="hidden font-mono text-[10px] text-muted sm:inline">{thread.thread.id}</span>
+          </div>
+        </div>
+        <span className="hidden max-w-sm truncate font-mono text-[10px] text-muted md:block">{thread.project.repoUrl}</span>
       </header>
 
-      <div className="grid gap-6 lg:h-[calc(100vh-11rem)] lg:grid-cols-[1fr_1.15fr]">
-        <Chat
+      <div className="grid grid-cols-2 rounded-lg border border-line/60 bg-surface/70 p-1 lg:hidden" role="tablist" aria-label="Thread view">
+        {(["chat", "fleet"] as const).map((pane) => <button key={pane} type="button" role="tab" aria-selected={mobilePane === pane} onClick={() => setMobilePane(pane)} className={cn("rounded-md px-3 py-2 text-sm font-medium capitalize transition-colors", mobilePane === pane ? "bg-raised text-bright" : "text-muted")}>{pane}{pane === "fleet" && activeRunId ? " · live" : ""}</button>)}
+      </div>
+
+      <div className="grid gap-5 lg:h-[calc(100vh-10.5rem)] lg:grid-cols-[minmax(20rem,.82fr)_minmax(34rem,1.18fr)]">
+        <div className={cn("min-h-[32rem] lg:min-h-0", mobilePane !== "chat" && "hidden lg:block")}><Chat
           messages={messages}
           busy={sending}
           error={error}
           activeRunId={activeRunId}
           onSend={send}
           onSelectRun={(runId) => { settled.current = null; setActiveRunId(runId); }}
-        />
+        /></div>
 
-        <div className="min-h-0 overflow-y-auto pr-1">
+        <div className={cn("min-h-[32rem] overflow-y-auto pr-1 lg:min-h-0", mobilePane !== "fleet" && "hidden lg:block")}>
           <RunPanel
             run={run.run}
             state={run.state}

@@ -25,7 +25,7 @@ await truncateAll(handle);
 const store = new Store(handle);
 const hub = new EventHub(store, handle, 250);
 const auth = new Authenticator(handle);
-const app = createApp({ handle, store, hub, auth });
+const app = createApp({ handle, store, hub, auth, githubApp: null });
 
 const server = serve({ fetch: app.fetch, port: 0 });
 // The same wiring index.ts uses - the websocket tests below exercise the real
@@ -67,6 +67,27 @@ await test("an unconfigured WorkOS falls back to a named dev user", async () => 
   equal(status, 200, "identified");
   equal(body.via, "dev", "the mode is stated, not hidden");
   assert(body.userId.startsWith("usr_"), "a real user row was created");
+});
+
+await test("setup reports safe readiness metadata without credentials", async () => {
+  const { status, body } = await api<{
+    auth: { mode: string }; vault: { configured: boolean }; vm: { provider: string };
+    github: { configured: boolean };
+    codex: { connected: boolean; status: string; accountId: string | null };
+  }>("GET", "/api/setup");
+  equal(status, 200, "setup is readable by its owner");
+  equal(body.auth.mode, "dev", "auth mode is explicit");
+  equal(body.vault.configured, true, "vault readiness is safe metadata");
+  equal(body.github.configured, false, "GitHub configuration is explicit");
+  equal(body.codex.connected, false, "missing Codex grant is actionable");
+  assert(!("accessToken" in body.codex), "no credential leaves the API");
+});
+
+await test("Codex connection rejects an off-site return URL", async () => {
+  const result = await api("POST", "/api/connections/codex/start", {
+    returnTo: "https://attacker.example/steal",
+  });
+  equal(result.status, 400, "open redirects are refused");
 });
 
 /* ------------------------------------------------------------------ */
@@ -113,6 +134,19 @@ await test("another user's project is a 404, not a 403", async () => {
   // indistinguishable from one that does not exist.
   const res = await api("GET", "/api/projects/prj_does_not_exist");
   equal(res.status, 404, "not found");
+});
+
+await test("project integration readiness is scoped and actionable", async () => {
+  const found = await api<{
+    github: { configured: boolean; installed: boolean; action: string; reason: string };
+  }>("GET", `/api/projects/${projectId}/integrations`);
+  equal(found.status, 200, "project owner can inspect readiness");
+  equal(found.body.github.configured, false, "missing app is explicit");
+  equal(found.body.github.installed, false, "repository is not falsely ready");
+  assert(found.body.github.reason.length > 0, "the UI receives an action message");
+
+  const missing = await api("GET", "/api/projects/prj_does_not_exist/integrations");
+  equal(missing.status, 404, "another project cannot be inspected");
 });
 
 group("schedules API");

@@ -57,7 +57,8 @@ export function Chat(
   };
 
   return (
-    <div className="flex min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line/60 bg-surface/70 p-3 shadow-[0_18px_50px_rgba(0,0,0,.12)]">
+      <div className="mb-3 flex items-center justify-between border-b border-line/40 pb-3"><div><p className="eyebrow">Conversation</p><p className="mt-1 text-xs text-muted">Captain responses arrive when a run finishes.</p></div><span className="font-mono text-[10px] text-muted">{messages.length} turns</span></div>
       <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {messages.length === 0 && (
           <Card className="p-6 text-sm text-muted">
@@ -79,7 +80,7 @@ export function Chat(
 
       {error && <ErrorNote>{error}</ErrorNote>}
 
-      <form onSubmit={submit} className="space-y-2">
+      <form onSubmit={submit} className="mt-3 space-y-2 border-t border-line/40 pt-3">
         <Textarea
           rows={3}
           value={draft}

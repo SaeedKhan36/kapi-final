@@ -1,8 +1,12 @@
 import type {
-  Health, Job, Message, Principal, Project, Run, RunDetail, RunEvent, Schedule, Thread,
+  Connection, Health, Job, Message, Principal, Project, ProjectIntegrations, Run, RunDetail,
+  RunEvent, Schedule, SecretMeta, SecretScope, Setup, Thread,
 } from "./types.ts";
 
-const configuredBase = String(import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+// `import.meta.env` exists in Vite, but not when deterministic UI components
+// are rendered under Node in the lightweight test suite.
+const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+const configuredBase = String(viteEnv?.VITE_API_URL ?? "").replace(/\/$/, "");
 export const apiBase = configuredBase && !/^https?:\/\//.test(configuredBase)
   ? `https://${configuredBase}` : configuredBase;
 
@@ -39,12 +43,28 @@ export const api = {
   logout: () => request<void>("POST", "/auth/logout"),
   health: () => request<Health>("GET", "/api/health"),
   me: () => request<Principal>("GET", "/api/me"),
+  setup: () => request<Setup>("GET", "/api/setup"),
+  connections: () => request<Connection[]>("GET", "/api/connections"),
+  startCodexConnection: (returnTo = location.href) =>
+    request<{ url: string; state: string }>("POST", "/api/connections/codex/start", { returnTo }),
+  disconnectCodex: () => request<{ disconnected: boolean }>("DELETE", "/api/connections/codex"),
 
   listProjects: () => request<Project[]>("GET", "/api/projects"),
   createProject: (body: { name: string; repoUrl: string; defaultBranch?: string }) =>
     request<Project>("POST", "/api/projects", body),
   getProject: (id: string) =>
     request<{ project: Project; threads: Thread[]; runs: Run[] }>("GET", `/api/projects/${id}`),
+  projectIntegrations: (id: string) =>
+    request<ProjectIntegrations>("GET", `/api/projects/${id}/integrations`),
+
+  listSecrets: (scope: SecretScope, scopeId: string) =>
+    request<SecretMeta[]>("GET", `/api/secrets?scope=${scope}&scopeId=${encodeURIComponent(scopeId)}`),
+  putSecret: (body: { scope: SecretScope; scopeId: string; name: string; value: string }) =>
+    request<SecretMeta>("PUT", "/api/secrets", body),
+  deleteSecret: (scope: SecretScope, scopeId: string, name: string) =>
+    request<{ deleted: boolean }>(
+      "DELETE", `/api/secrets/${scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(name)}`,
+    ),
 
   listSchedules: (projectId: string) =>
     request<Schedule[]>("GET", `/api/projects/${projectId}/schedules`),

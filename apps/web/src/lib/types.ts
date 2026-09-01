@@ -24,6 +24,34 @@ export type Health = {
 
 export type Principal = { userId: string; email?: string | null; name?: string | null };
 
+export type Setup = {
+  auth: { mode: "workos" | "dev" | string; authenticated: boolean };
+  vault: { configured: boolean };
+  vm: { provider: string };
+  github: { configured: boolean };
+  codex: {
+    connected: boolean; status: string; accountId: string | null; updatedAt: string | null;
+  };
+};
+
+export type ProjectIntegrations = {
+  github: {
+    configured: boolean; installed: boolean; installationId?: number;
+    action?: "install" | "configure" | "retry"; installUrl?: string; reason?: string;
+  };
+};
+
+export type SecretScope = "user" | "project";
+export type SecretMeta = {
+  id: string; scope: SecretScope; scopeId: string; name: string;
+  createdAt: string; updatedAt: string;
+};
+
+export type Connection = {
+  provider: string; status: string; accountId: string | null;
+  expiresAt: string | null; updatedAt: string;
+};
+
 export type Project = {
   id: string; ownerId: string; name: string; repoUrl: string;
   defaultBranch: string; budgets: Record<string, number>; createdAt: string;

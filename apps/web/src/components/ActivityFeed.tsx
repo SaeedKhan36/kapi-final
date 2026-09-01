@@ -44,6 +44,7 @@ export function ActivityFeed({ node }: { node: AgentNode | null }) {
       <div className="flex items-center gap-2 border-b border-line/40 px-3 py-2">
         <span className="font-mono text-[11px] text-muted">{node.jobId}</span>
         {node.vmId && <span className="font-mono text-[10px] text-muted">vm {node.vmId}</span>}
+        {node.prUrl && <a className="ml-auto text-xs font-medium text-accent hover:underline" href={node.prUrl} target="_blank" rel="noreferrer">Open pull request ↗</a>}
       </div>
 
       <div
