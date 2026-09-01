@@ -1,7 +1,9 @@
 import { loadEnv } from "@kapi/env";
 loadEnv();
 
-import { createDb, truncateAll } from "@kapi/db";
+import {
+  connectDb, createDb, createIsolatedTestSchema, retryDeadlockedTransaction, type DbHandle,
+} from "@kapi/db";
 import {
   cancelSubtree, claim, complete, enqueue, fail, getJob, heartbeat, listJobs,
   markRunning, reap, startReaper,
@@ -13,13 +15,63 @@ import { seedRun, seedSiblingRun, type Seeded } from "./seed.ts";
 const REAL_PG = Boolean(process.env.DATABASE_URL);
 if (!REAL_PG) process.env.KAPI_PGLITE_DIR = "memory://queue-test";
 
-const handle = await createDb();
+const isolated = REAL_PG
+  ? await createIsolatedTestSchema(process.env.DATABASE_URL!, "queue")
+  : null;
+const handle = await createDb(isolated?.url);
 console.log(`\n  database: ${handle.target}`);
 
-// Start clean. `claim` with no runId filter is global across every run - which
-// is correct for a worker pool, and means leftover rows from a previous suite
-// run would be handed to this one's claimers.
-await truncateAll(handle);
+group("0. startup ownership");
+
+await test("concurrent local bootstraps serialize and production connections only verify", async () => {
+  if (handle.embedded) return;
+  const bootstraps = await Promise.all(
+    Array.from({ length: 8 }, () => createDb(isolated!.url, { bootstrap: true })),
+  );
+  await Promise.all(bootstraps.map((candidate) => candidate.close()));
+  const services = await Promise.all(
+    Array.from({ length: 8 }, () => createDb(isolated!.url, { bootstrap: false })),
+  );
+  await Promise.all(services.map((candidate) => candidate.close()));
+});
+
+await test("a production connection fails clearly before pre-deploy migrations", async () => {
+  if (handle.embedded) return;
+  const blank = await createIsolatedTestSchema(process.env.DATABASE_URL!, "unmigrated");
+  try {
+    let message = "";
+    try { await connectDb(blank.url); }
+    catch (err) { message = err instanceof Error ? err.message : String(err); }
+    assert(message.includes("pnpm db:migrate"), `actionable migration error, got: ${message}`);
+  } finally {
+    await blank.cleanup();
+  }
+});
+
+await test("deadlock retry is bounded and limited to rolled-back 40P01 transactions", async () => {
+  let attempts = 0;
+  const deadlocking = {
+    embedded: false,
+    transaction: async (fn: (tx: never) => Promise<number>) => {
+      attempts++;
+      if (attempts < 3) throw Object.assign(new Error("deadlock"), { code: "40P01" });
+      return fn((async () => []) as never);
+    },
+  } as unknown as DbHandle;
+  equal(await retryDeadlockedTransaction(deadlocking, async () => 42), 42, "eventually succeeds");
+  equal(attempts, 3, "two retries and no unbounded loop");
+
+  let otherAttempts = 0;
+  const otherFailure = {
+    embedded: false,
+    transaction: async () => {
+      otherAttempts++;
+      throw Object.assign(new Error("lock unavailable"), { code: "55P03" });
+    },
+  } as unknown as DbHandle;
+  try { await retryDeadlockedTransaction(otherFailure, async () => 0); } catch { /* expected */ }
+  equal(otherAttempts, 1, "non-deadlock failures are not retried");
+});
 
 const build = (runId: string, over: Partial<Parameters<typeof enqueue>[1]> = {}) =>
   enqueue(handle, {
@@ -31,6 +83,17 @@ const build = (runId: string, over: Partial<Parameters<typeof enqueue>[1]> = {})
 const okResult = (summary = "done") => ({
   ok: true, summary, filesChanged: [], commits: [],
 });
+
+// Stress claims deliberately do not exercise completion. Retire them in one
+// statement so later lease tests only reap the rows they created themselves.
+const retireStressClaims = async (jobs: Job[]) => {
+  if (jobs.length === 0) return;
+  await handle.raw(
+    `UPDATE jobs SET status='succeeded', lease_expires_at=NULL, finished_at=now()
+     WHERE id = ANY($1::text[])`,
+    [jobs.map((job) => job.id)],
+  );
+};
 
 /* ------------------------------------------------------------------ */
 
@@ -61,6 +124,7 @@ await test("N VMs claiming at once produce zero double-claims", async () => {
   equal(new Set(got.map((j) => j.vmId)).size, 20, "each job has a distinct lease holder");
   assert(got.every((j) => j.attempts === 1), "attempts incremented exactly once each");
   equal(new Set(jobs.map((j) => j.id)).size, 20, "the enqueued set is what was claimed");
+  await retireStressClaims(got);
 });
 
 await test("claims spread across runs contend on jobs, not on one run row", async () => {
@@ -80,6 +144,27 @@ await test("claims spread across runs contend on jobs, not on one run row", asyn
   const got = claims.filter((c): c is Job => c !== null);
   equal(got.length, 20, "all 20 jobs claimed");
   equal(new Set(got.map((j) => j.id)).size, 20, "no duplicates across runs");
+  await retireStressClaims(got);
+});
+
+await test("100 simultaneous claimers across ten runs remain unique", async () => {
+  if (handle.embedded) throw new Error("requires real Postgres (see above)");
+
+  const first = await seedRun(handle);
+  const runIds = [first.runId, ...(await Promise.all(
+    Array.from({ length: 9 }, () => seedSiblingRun(handle, first)),
+  ))];
+  await Promise.all(runIds.flatMap((runId) =>
+    Array.from({ length: 10 }, () => build(runId))));
+
+  const claims = await Promise.all(
+    Array.from({ length: 100 }, (_, i) => claim(handle, { vmId: `hundred-${i}` })),
+  );
+  const got = claims.filter((candidate): candidate is Job => candidate !== null);
+  equal(got.length, 100, "every claimer received work");
+  equal(new Set(got.map((job) => job.id)).size, 100, "all claimed jobs are unique");
+  equal(new Set(got.map((job) => job.vmId)).size, 100, "all leases have unique holders");
+  await retireStressClaims(got);
 });
 
 await test("more claimers than jobs: the surplus get null, not a duplicate", async () => {
@@ -95,6 +180,7 @@ await test("more claimers than jobs: the surplus get null, not a duplicate", asy
   equal(got.length, 5, "exactly the available jobs were handed out");
   equal(claims.filter((c) => c === null).length, 10, "the rest got nothing");
   equal(new Set(got.map((j) => j.id)).size, 5, "no duplicates");
+  await retireStressClaims(got);
 });
 
 /* ------------------------------------------------------------------ */
@@ -423,4 +509,5 @@ await test("appending an event for an unknown run is refused", async () => {
 });
 
 await handle.close();
+await isolated?.cleanup();
 report();

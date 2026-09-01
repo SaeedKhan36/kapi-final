@@ -1,8 +1,8 @@
 import { loadEnv } from "@kapi/env";
 loadEnv();
 
-import { createDb, MIGRATIONS } from "@kapi/db";
+import { bootstrapDb, MIGRATIONS } from "@kapi/db";
 
-const handle = await createDb();
+const handle = await bootstrapDb();
 console.log(`database ready at ${handle.target}; ${MIGRATIONS.length} migration(s) known`);
 await handle.close();

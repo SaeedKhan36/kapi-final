@@ -1,8 +1,9 @@
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "./schema.ts";
 import { DDL, TABLES } from "./ddl.ts";
-import { runMigrations } from "./migrations.ts";
+import { MIGRATIONS, runMigrations, runMigrationsIn } from "./migrations.ts";
 
 export * as schema from "./schema.ts";
 export { schema as tables };
@@ -56,7 +57,26 @@ export type DbHandle = {
  * account, no container, and no network, and the schema is identical when
  * DATABASE_URL later points at a real server.
  */
-export async function createDb(url = process.env.DATABASE_URL): Promise<DbHandle> {
+export type CreateDbOptions = {
+  /** Production services connect and verify; migration/bootstrap jobs opt in. */
+  bootstrap?: boolean;
+};
+
+const EVENT_TRIGGER_DDL = `
+  CREATE OR REPLACE FUNCTION kapi_notify_event() RETURNS trigger AS $$
+  BEGIN
+    PERFORM pg_notify('kapi_events', json_build_object('runId', NEW.run_id, 'seq', NEW.seq)::text);
+    RETURN NEW;
+  END; $$ LANGUAGE plpgsql;
+  DROP TRIGGER IF EXISTS kapi_events_notify ON events;
+  CREATE TRIGGER kapi_events_notify AFTER INSERT ON events
+    FOR EACH ROW EXECUTE FUNCTION kapi_notify_event();
+`;
+
+export async function createDb(
+  url = process.env.DATABASE_URL,
+  options: CreateDbOptions = {},
+): Promise<DbHandle> {
   if (url) {
     const [{ drizzle }, postgresMod] = await Promise.all([
       import("drizzle-orm/postgres-js"),
@@ -109,18 +129,27 @@ export async function createDb(url = process.env.DATABASE_URL): Promise<DbHandle
       target: describeDbTarget(url),
       embedded: false,
     };
-    await handle.exec(DDL);
-    await runMigrations(handle);
-    await handle.exec(`
-      CREATE OR REPLACE FUNCTION kapi_notify_event() RETURNS trigger AS $$
-      BEGIN
-        PERFORM pg_notify('kapi_events', json_build_object('runId', NEW.run_id, 'seq', NEW.seq)::text);
-        RETURN NEW;
-      END; $$ LANGUAGE plpgsql;
-      DROP TRIGGER IF EXISTS kapi_events_notify ON events;
-      CREATE TRIGGER kapi_events_notify AFTER INSERT ON events
-        FOR EACH ROW EXECUTE FUNCTION kapi_notify_event();
-    `);
+    try {
+      const shouldBootstrap = options.bootstrap ?? process.env.NODE_ENV !== "production";
+      if (shouldBootstrap) {
+        // DDL, migrations and trigger replacement are one atomic, database-wide
+        // writer. Concurrent local/test startups wait here instead of deadlocking
+        // while taking incompatible relation locks in different orders.
+        await client.begin(async (tx) => {
+          const run: SqlRunner = async <T,>(sql: string, params: unknown[] = []) =>
+            (await tx.unsafe(sql, params as never[])) as unknown as T[];
+          await run(`SELECT pg_advisory_xact_lock(hashtextextended('kapi:schema-bootstrap', 0))`);
+          await tx.unsafe(DDL).simple();
+          await runMigrationsIn(run);
+          await tx.unsafe(EVENT_TRIGGER_DDL).simple();
+        });
+      } else {
+        await verifyMigrationState(handle);
+      }
+    } catch (err) {
+      await handle.close().catch(() => {});
+      throw err;
+    }
     return handle;
   }
 
@@ -151,6 +180,84 @@ export async function createDb(url = process.env.DATABASE_URL): Promise<DbHandle
   await handle.exec(DDL);
   await runMigrations(handle);
   return handle;
+}
+
+/** Runtime service path: connect and verify only, never write schema. */
+export const connectDb = (url = process.env.DATABASE_URL) =>
+  createDb(url, { bootstrap: false });
+
+/** Migration/local bootstrap path: the only API allowed to write schema. */
+export const bootstrapDb = (url = process.env.DATABASE_URL) =>
+  createDb(url, { bootstrap: true });
+
+/** Fails startup clearly when pre-deploy migrations did not run. */
+export async function verifyMigrationState(handle: DbHandle): Promise<void> {
+  try {
+    const table = await handle.raw<{ present: string | null }>(
+      `SELECT to_regclass('schema_migrations')::text AS present`,
+    );
+    if (!table[0]?.present) throw new Error("schema_migrations is missing");
+    const applied = await handle.raw<{ version: number }>(`SELECT version FROM schema_migrations`);
+    const versions = new Set(applied.map((row) => Number(row.version)));
+    const missing = MIGRATIONS.filter((migration) => !versions.has(migration.version));
+    if (missing.length > 0) {
+      throw new Error(`missing migration(s): ${missing.map((m) => `${m.version}:${m.name}`).join(", ")}`);
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`database is not ready (${detail}); run pnpm db:migrate before starting services`);
+  }
+}
+
+/** Retries only deadlocked Postgres transactions, which PostgreSQL has rolled back. */
+export async function retryDeadlockedTransaction<T>(
+  handle: DbHandle,
+  fn: (tx: SqlRunner) => Promise<T>,
+  maxAttempts = 3,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await handle.transaction(fn);
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code;
+      if (handle.embedded || code !== "40P01" || attempt >= maxAttempts) throw err;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(40, 5 * (2 ** (attempt - 1)))));
+    }
+  }
+}
+
+/** Creates an exact, disposable schema so concurrent real-Postgres tests never share rows. */
+export async function createIsolatedTestSchema(
+  databaseUrl: string,
+  suite: string,
+): Promise<{ url: string; schema: string; cleanup: () => Promise<void> }> {
+  const postgres = (await import("postgres")).default;
+  const safeSuite = suite.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 24);
+  const schemaName = `kapi_test_${safeSuite}_${process.pid}_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  if (!/^kapi_test_[a-z0-9_]+$/.test(schemaName)) throw new Error("unsafe generated test schema");
+
+  const admin = postgres(databaseUrl, { max: 1, prepare: false, onnotice: () => {} });
+  await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
+  const scoped = new URL(databaseUrl);
+  // Neon only permits a custom search_path on its direct endpoint.
+  scoped.hostname = scoped.hostname.replace("-pooler.", ".");
+  // `options=-csearch_path=...` survives PgBouncer/Neon startup parameter
+  // filtering; a bare `search_path` query parameter is silently discarded.
+  scoped.searchParams.set("options", `-csearch_path=${schemaName}`);
+  let cleaned = false;
+  return {
+    url: scoped.toString(),
+    schema: schemaName,
+    cleanup: async () => {
+      if (cleaned) return;
+      cleaned = true;
+      try {
+        await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
+    },
+  };
 }
 
 export function describeDbTarget(url = process.env.DATABASE_URL): string {

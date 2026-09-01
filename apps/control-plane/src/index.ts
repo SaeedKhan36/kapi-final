@@ -2,7 +2,7 @@ import { loadEnv } from "@kapi/env";
 loadEnv();
 
 import { serve } from "@hono/node-server";
-import { createDb } from "@kapi/db";
+import { connectDb, createDb } from "@kapi/db";
 import { Authenticator, vaultConfigured } from "@kapi/identity";
 import { Store } from "./store.ts";
 import { EventHub } from "./events.ts";
@@ -15,7 +15,7 @@ import { RequestTracker } from "./request-tracker.ts";
 
 validateProductionConfig();
 
-const handle = await createDb();
+const handle = process.env.NODE_ENV === "production" ? await connectDb() : await createDb();
 const store = new Store(handle);
 const hub = new EventHub(store, handle);
 const auth = new Authenticator(handle);

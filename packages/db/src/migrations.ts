@@ -63,7 +63,12 @@ export const MIGRATIONS: readonly Migration[] = [
 ];
 
 export async function runMigrations(handle: DbHandle): Promise<void> {
-  await handle.exec(`
+  await handle.transaction(runMigrationsIn);
+}
+
+/** Runs migrations through an existing transaction (used by locked bootstrap). */
+export async function runMigrationsIn(tx: import("./index.ts").SqlRunner): Promise<void> {
+  await tx(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -71,18 +76,16 @@ export async function runMigrations(handle: DbHandle): Promise<void> {
     );
   `);
   for (const migration of MIGRATIONS) {
-    await handle.transaction(async (tx) => {
-      const existing = await tx<{ version: number }>(
-        `SELECT version FROM schema_migrations WHERE version = $1`, [migration.version],
-      );
-      if (existing.length > 0) return;
-      for (const statement of migration.sql.split(";").map((s) => s.trim()).filter(Boolean)) {
-        await tx(statement);
-      }
-      await tx(
-        `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`,
-        [migration.version, migration.name],
-      );
-    });
+    const existing = await tx<{ version: number }>(
+      `SELECT version FROM schema_migrations WHERE version = $1`, [migration.version],
+    );
+    if (existing.length > 0) continue;
+    for (const statement of migration.sql.split(";").map((s) => s.trim()).filter(Boolean)) {
+      await tx(statement);
+    }
+    await tx(
+      `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`,
+      [migration.version, migration.name],
+    );
   }
 }

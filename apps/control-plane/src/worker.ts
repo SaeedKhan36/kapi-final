@@ -1,14 +1,14 @@
 import { loadEnv } from "@kapi/env";
 loadEnv();
 
-import { createDb } from "@kapi/db";
+import { connectDb, createDb } from "@kapi/db";
 import { Store } from "./store.ts";
 import { startOperations } from "./operations.ts";
 import { validateProductionConfig } from "./config.ts";
 
 validateProductionConfig("worker");
 
-const handle = await createDb();
+const handle = process.env.NODE_ENV === "production" ? await connectDb() : await createDb();
 const store = new Store(handle);
 const operations = startOperations({ handle, store });
 console.log(`[worker] operations started (${operations.provisioner.providerName}, ${handle.target})`);

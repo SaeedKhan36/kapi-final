@@ -1,4 +1,4 @@
-import type { DbHandle } from "@kapi/db";
+import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
 import type { Job } from "@kapi/protocol";
 import { JOB_COLUMNS, toJob, type JobRow } from "./rows.ts";
 import { appendEvent, jobStatusEvent } from "./events.ts";
@@ -15,7 +15,7 @@ import { appendEvent, jobStatusEvent } from "./events.ts";
  * take disjoint sets rather than fighting over the same rows.
  */
 export async function reap(handle: DbHandle, limit = 100): Promise<Job[]> {
-  return handle.transaction(async (tx) => {
+  return retryDeadlockedTransaction(handle, async (tx) => {
     const rows = await tx<JobRow>(
       `UPDATE jobs SET
          status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
@@ -37,7 +37,17 @@ export async function reap(handle: DbHandle, limit = 100): Promise<Job[]> {
     );
 
     const reaped = rows.map(toJob);
+    // Keep every queue mutation on jobs -> agents -> runs/events. Updating all
+    // agents before allocating any event sequence avoids the inverse ordering
+    // that used to deadlock with usage accounting.
     for (const job of reaped) {
+      await tx(
+        `UPDATE agents SET status = $2, stopped_at = now() WHERE job_id = $1`,
+        [job.id, job.status === "failed" ? "failed" : "evicted"],
+      );
+    }
+    for (const job of [...reaped].sort((a, b) =>
+      a.runId.localeCompare(b.runId) || a.id.localeCompare(b.id))) {
       await appendEvent(tx, jobStatusEvent({
         runId: job.runId,
         jobId: job.id,
@@ -45,13 +55,6 @@ export async function reap(handle: DbHandle, limit = 100): Promise<Job[]> {
         attempts: job.attempts,
         detail: job.error ?? "lease expired",
       }));
-      // Stop the agent row whether the job was requeued or dead-lettered. The
-      // VM that held this lease is gone either way, and a live-looking agent
-      // row is what tells the provisioner not to start a replacement.
-      await tx(
-        `UPDATE agents SET status = $2, stopped_at = now() WHERE job_id = $1`,
-        [job.id, job.status === "failed" ? "failed" : "evicted"],
-      );
     }
     return reaped;
   });

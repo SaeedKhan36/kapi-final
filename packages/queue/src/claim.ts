@@ -1,4 +1,4 @@
-import type { DbHandle } from "@kapi/db";
+import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
 import type { Job, JobKind } from "@kapi/protocol";
 import { JOB_COLUMNS, toJob, type JobRow } from "./rows.ts";
 import { appendEvent, jobStatusEvent } from "./events.ts";
@@ -30,7 +30,7 @@ export async function claim(handle: DbHandle, opts: ClaimOptions): Promise<Job |
   const lease = opts.leaseSeconds ?? leaseSeconds();
   const kinds = opts.kinds ?? [];
 
-  return handle.transaction(async (tx) => {
+  return retryDeadlockedTransaction(handle, async (tx) => {
     const rows = await tx<JobRow>(
       `UPDATE jobs SET
          status = 'claimed',

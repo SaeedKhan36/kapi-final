@@ -1,4 +1,4 @@
-import type { DbHandle, SqlRunner } from "@kapi/db";
+import { retryDeadlockedTransaction, type DbHandle, type SqlRunner } from "@kapi/db";
 import {
   JobSpecSchema, newId, type Job, type JobResult, type JobSpec,
 } from "@kapi/protocol";
@@ -30,7 +30,7 @@ async function retryOnClosed<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Adds a job. This is what a captain's `spawn_agents` tool ultimately calls. */
 export async function enqueue(handle: DbHandle, spec: JobSpec): Promise<Job> {
-  return handle.transaction((tx) => enqueueIn(tx, spec));
+  return retryDeadlockedTransaction(handle, (tx) => enqueueIn(tx, spec));
 }
 
 /** Transactional form used when opening a run and its root job atomically. */
@@ -76,10 +76,9 @@ export async function heartbeat(
   handle: DbHandle, jobId: string, vmId: string, seconds = leaseSeconds(),
 ): Promise<boolean> {
   // Retried because it is idempotent: it extends a lease and creates nothing.
-  // `claim`, `complete` and `fail` deliberately do NOT retry - a first attempt
-  // that committed before the connection dropped would make the retry look
-  // like a failure ("lease lost") or hand out a second job, and their callers
-  // poll anyway.
+  // `claim`, `complete` and `fail` do not retry ambiguous connection failures:
+  // a first attempt may have committed. They only retry PostgreSQL 40P01,
+  // whose contract guarantees the whole transaction was rolled back.
   const rows = await retryOnClosed(() => handle.raw<{ id: string }>(
     `UPDATE jobs SET lease_expires_at = now() + ($3::int * interval '1 second')
      WHERE id = $1 AND vm_id = $2 AND status IN ${LEASED}
@@ -98,7 +97,7 @@ export async function heartbeat(
 export async function markRunning(
   handle: DbHandle, jobId: string, vmId: string,
 ): Promise<Job | null> {
-  return handle.transaction(async (tx) => {
+  return retryDeadlockedTransaction(handle, async (tx) => {
     const rows = await tx<JobRow>(
       `UPDATE jobs SET status = 'running'
        WHERE id = $1 AND vm_id = $2 AND status = 'claimed'
@@ -119,7 +118,7 @@ export async function markRunning(
 export async function complete(
   handle: DbHandle, jobId: string, vmId: string, result: JobResult,
 ): Promise<Job | null> {
-  return handle.transaction(async (tx) => {
+  return retryDeadlockedTransaction(handle, async (tx) => {
     const rows = await tx<JobRow>(
       `UPDATE jobs SET status = 'succeeded', result = $3, error = NULL,
                       lease_expires_at = NULL, finished_at = now()
@@ -130,10 +129,12 @@ export async function complete(
     const row = rows[0];
     if (!row) return null;
     const job = toJob(row);
+    // Queue lock order is jobs -> agents -> runs/events. Accounting also takes
+    // agents before runs, so this ordering cannot form a cycle with it.
+    await stopAgent(tx, jobId, "succeeded");
     await appendEvent(tx, jobStatusEvent({
       runId: job.runId, jobId: job.id, to: "succeeded", vmId, detail: result.summary,
     }));
-    await stopAgent(tx, jobId, "succeeded");
     return job;
   });
 }
@@ -146,7 +147,7 @@ export async function complete(
 export async function fail(
   handle: DbHandle, jobId: string, vmId: string, error: string,
 ): Promise<Job | null> {
-  return handle.transaction(async (tx) => {
+  return retryDeadlockedTransaction(handle, async (tx) => {
     const rows = await tx<JobRow>(
       `UPDATE jobs SET
          status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
@@ -161,13 +162,13 @@ export async function fail(
     const row = rows[0];
     if (!row) return null;
     const job = toJob(row);
+    // Same reasoning as the reaper: requeued or dead-lettered, this VM is done
+    // with the job, so its agent row must not look live to the provisioner.
+    await stopAgent(tx, jobId, job.status === "failed" ? "failed" : "retrying");
     await appendEvent(tx, jobStatusEvent({
       runId: job.runId, jobId: job.id, to: job.status, vmId,
       attempts: job.attempts, detail: error,
     }));
-    // Same reasoning as the reaper: requeued or dead-lettered, this VM is done
-    // with the job, so its agent row must not look live to the provisioner.
-    await stopAgent(tx, jobId, job.status === "failed" ? "failed" : "retrying");
     return job;
   });
 }
@@ -180,7 +181,7 @@ export async function fail(
 export async function cancelSubtree(
   handle: DbHandle, jobId: string, reason = "cancelled by parent",
 ): Promise<Job[]> {
-  return handle.transaction(async (tx) => {
+  return retryDeadlockedTransaction(handle, async (tx) => {
     const rows = await tx<JobRow>(
       `WITH RECURSIVE subtree AS (
          SELECT id FROM jobs WHERE id = $1
@@ -196,11 +197,18 @@ export async function cancelSubtree(
     );
 
     const cancelled = rows.map(toJob);
-    for (const job of cancelled) {
+    if (cancelled.length > 0) {
+      await tx(
+        `UPDATE agents SET status = 'cancelled', stopped_at = now()
+         WHERE job_id = ANY($1::text[])`,
+        [cancelled.map((job) => job.id)],
+      );
+    }
+    for (const job of [...cancelled].sort((a, b) =>
+      a.runId.localeCompare(b.runId) || a.id.localeCompare(b.id))) {
       await appendEvent(tx, jobStatusEvent({
         runId: job.runId, jobId: job.id, to: "cancelled", detail: reason,
       }));
-      await stopAgent(tx, job.id, "cancelled");
     }
     return cancelled;
   });
