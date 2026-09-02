@@ -36,8 +36,6 @@ export function ThreadView({ threadId }: { threadId: string }) {
     setActiveRunId(null);
     load()
       .then((loaded) => {
-        // Open on the newest run in the thread; that is what the user was
-        // watching when they last had this page open.
         const latest = [...loaded].reverse().find((m) => m.runId);
         if (latest?.runId) setActiveRunId(latest.runId);
       })
@@ -46,8 +44,6 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
   const run = useRun(activeRunId);
 
-  // A captain's closing turn is written when its job completes, so the thread
-  // is re-read exactly once per run that ends rather than polled throughout.
   const settled = useRef<string | null>(null);
   useEffect(() => {
     if (!activeRunId || !isTerminal(run.state.status)) return;
@@ -73,37 +69,75 @@ export function ThreadView({ threadId }: { threadId: string }) {
   };
 
   if (loadError) return <ErrorNote>{loadError}</ErrorNote>;
-  if (!thread) return <div className="flex items-center gap-2 text-sm text-muted"><Spinner /> loading thread…</div>;
+  if (!thread) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted">
+        <Spinner /> loading thread…
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      <header className="flex flex-wrap items-center gap-3 border-b border-line/50 pb-4">
-        <Link to={`/projects/${thread.project.id}`} className="text-muted transition-colors hover:text-accent" aria-label={`Back to ${thread.project.name}`}>←</Link>
-        <div className="min-w-0 flex-1">
-          <p className="eyebrow">Live engineering thread</p>
-          <div className="mt-1 flex min-w-0 items-baseline gap-2">
-            <h1 className="truncate text-lg font-semibold">{thread.thread.title ?? thread.project.name}</h1>
-            <span className="hidden font-mono text-[10px] text-muted sm:inline">{thread.thread.id}</span>
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3">
+            <Link
+              to={`/projects/${thread.project.id}`}
+              className="text-muted transition-colors hover:text-accent"
+              aria-label={`Back to ${thread.project.name}`}
+            >
+              ←
+            </Link>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {thread.thread.title ?? thread.project.name}
+            </h1>
           </div>
+          <p className="mt-1 font-mono text-xs text-muted">
+            {thread.thread.id} · {thread.project.repoUrl}
+          </p>
         </div>
-        <span className="hidden max-w-sm truncate font-mono text-[10px] text-muted md:block">{thread.project.repoUrl}</span>
       </header>
 
-      <div className="grid grid-cols-2 rounded-lg border border-line/60 bg-surface/70 p-1 lg:hidden" role="tablist" aria-label="Thread view">
-        {(["chat", "fleet"] as const).map((pane) => <button key={pane} type="button" role="tab" aria-selected={mobilePane === pane} onClick={() => setMobilePane(pane)} className={cn("rounded-md px-3 py-2 text-sm font-medium capitalize transition-colors", mobilePane === pane ? "bg-raised text-bright" : "text-muted")}>{pane}{pane === "fleet" && activeRunId ? " · live" : ""}</button>)}
+      <div className="grid grid-cols-2 gap-1 lg:hidden" role="tablist" aria-label="Thread view">
+        {(["chat", "fleet"] as const).map((pane) => (
+          <button
+            key={pane}
+            type="button"
+            role="tab"
+            aria-selected={mobilePane === pane}
+            onClick={() => setMobilePane(pane)}
+            className={cn(
+              "rounded-lg border px-3 py-2 text-sm font-medium capitalize transition-colors",
+              mobilePane === pane
+                ? "border-accent/50 bg-raised/50 text-bright"
+                : "border-line/60 text-muted",
+            )}
+          >
+            {pane}{pane === "fleet" && activeRunId ? " · live" : ""}
+          </button>
+        ))}
       </div>
 
-      <div className="grid gap-5 lg:h-[calc(100vh-10.5rem)] lg:grid-cols-[minmax(20rem,.82fr)_minmax(34rem,1.18fr)]">
-        <div className={cn("min-h-[32rem] lg:min-h-0", mobilePane !== "chat" && "hidden lg:block")}><Chat
-          messages={messages}
-          busy={sending}
-          error={error}
-          activeRunId={activeRunId}
-          onSend={send}
-          onSelectRun={(runId) => { settled.current = null; setActiveRunId(runId); }}
-        /></div>
+      <div className="grid gap-6 lg:h-[calc(100vh-10rem)] lg:grid-cols-[1.1fr_1fr]">
+        <div className={cn("min-h-[32rem] lg:min-h-0", mobilePane !== "chat" && "hidden lg:block")}>
+          <Chat
+            messages={messages}
+            busy={sending}
+            error={error}
+            activeRunId={activeRunId}
+            onSend={send}
+            onSelectRun={(runId) => {
+              settled.current = null;
+              setActiveRunId(runId);
+            }}
+          />
+        </div>
 
-        <div className={cn("min-h-[32rem] overflow-y-auto pr-1 lg:min-h-0", mobilePane !== "fleet" && "hidden lg:block")}>
+        <div className={cn(
+          "min-h-[32rem] overflow-y-auto lg:min-h-0 lg:sticky lg:top-20 lg:self-start",
+          mobilePane !== "fleet" && "hidden lg:block",
+        )}>
           <RunPanel
             run={run.run}
             state={run.state}

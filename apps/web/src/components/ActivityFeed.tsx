@@ -50,7 +50,7 @@ export function ActivityFeed({ node }: { node: AgentNode | null }) {
       <div
         ref={ref}
         onScroll={onScroll}
-        className="max-h-[46vh] min-h-[10rem] divide-y divide-line/20 overflow-y-auto"
+        className="max-h-[70vh] min-h-[10rem] divide-y divide-line/30 overflow-y-auto"
       >
         {node.activity.length === 0 && (
           <p className="p-6 text-center text-sm text-muted">Nothing from this agent yet.</p>

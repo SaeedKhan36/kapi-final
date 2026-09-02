@@ -41,61 +41,66 @@ export function RunPanel(
   const running = !isTerminal(state.status);
 
   return (
-    <div className="space-y-3">
-      <Card className="overflow-hidden">
-        <div className="border-b border-line/50 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge status={state.status} />
-          <span className="font-mono text-[11px] text-muted">{run.id}</span>
-          <div className="ml-auto flex items-center gap-3">
-            <LiveDot connected={connected} />
-            {running && (
-              <Button
-                variant="danger"
-                className="px-2 py-1 text-xs"
-                disabled={cancelling}
-                onClick={() => {
-                  if (!confirmCancel) { setConfirmCancel(true); return; }
-                  setCancelling(true); onCancel();
-                }}
-              >
-                {cancelling ? "cancelling…" : confirmCancel ? "Confirm cancel" : "Cancel run"}
-              </Button>
-            )}
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-medium text-muted">Run</h2>
+            <Badge status={state.status} />
           </div>
+          <p className="mt-1 line-clamp-2 text-sm text-bright/90">{run.goal}</p>
+          <p className="mt-1 font-mono text-xs text-muted">{run.id}</p>
+          {run.error && <p className="mt-1 text-xs text-bad">{run.error}</p>}
         </div>
-
-        <p className="mt-3 line-clamp-2 text-sm text-bright/90">{run.goal}</p>
-        {run.error && <p className="mt-1 text-xs text-bad">{run.error}</p>}
+        <div className="flex items-center gap-4 text-xs text-muted">
+          <LiveDot connected={connected} />
+          {running && (
+            <Button
+              variant="danger"
+              className="px-2 py-1 text-xs"
+              disabled={cancelling}
+              onClick={() => {
+                if (!confirmCancel) { setConfirmCancel(true); return; }
+                setCancelling(true);
+                onCancel();
+              }}
+            >
+              {cancelling ? "cancelling…" : confirmCancel ? "Confirm cancel" : "Cancel run"}
+            </Button>
+          )}
         </div>
+      </header>
 
-        <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+      <Card className="p-4">
+        <div className="grid gap-3 sm:grid-cols-2">
           <BudgetMeter label="Model requests" used={run.llmRequests} max={run.maxLlmRequests} />
           <BudgetMeter label="Tokens" used={run.llmTokens} max={run.maxTokens} />
           <BudgetMeter label="Spawns" used={run.totalSpawns} max={run.maxTotalSpawns} />
           <BudgetMeter label="VM time" used={run.vmSeconds} max={run.maxVmSeconds} suffix="s" />
         </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line/40 px-4 py-2.5 font-mono text-[10px] text-muted">
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-muted">
           <span>{state.order.length} agents</span>
           {Object.entries(counts).map(([status, n]) => <span key={status}>{status} {n}</span>)}
-          <span className="ml-auto text-muted/70">depth ≤ {run.maxSpawnDepth}</span>
-          <span className="text-muted/70">
-            cost {run.costStatus === "unavailable" ? "unavailable" : `$${(run.usdCents / 100).toFixed(2)}/${(run.maxUsdCents / 100).toFixed(2)}`} ({run.costStatus})
+          <span className="ml-auto">depth ≤ {run.maxSpawnDepth}</span>
+          <span>
+            cost {run.costStatus === "unavailable"
+              ? "unavailable"
+              : `$${(run.usdCents / 100).toFixed(2)}/${(run.maxUsdCents / 100).toFixed(2)}`} ({run.costStatus})
           </span>
         </div>
       </Card>
 
       {error && <ErrorNote>{error}</ErrorNote>}
 
-      <div>
-        <h2 className="mb-2 text-sm font-medium text-muted">Fleet</h2>
+      <section>
+        <h2 className="mb-3 text-sm font-medium text-muted">Fleet</h2>
         <AgentTree roots={roots} selected={selected} onSelect={setSelected} />
-      </div>
+      </section>
 
-      <div>
-        <h2 className="mb-2 text-sm font-medium text-muted">Trace</h2>
+      <section>
+        <h2 className="mb-3 text-sm font-medium text-muted">Trace</h2>
         <ActivityFeed node={selected ? state.nodes[selected] ?? null : null} />
-      </div>
+      </section>
     </div>
   );
 }

@@ -47,8 +47,6 @@ export function Chat(
     onSend(content);
   };
 
-  // Enter sends, shift-enter breaks the line. A goal is usually one paragraph,
-  // and reaching for a button every time is the wrong default for a chat.
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -57,44 +55,57 @@ export function Chat(
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line/60 bg-surface/70 p-3 shadow-[0_18px_50px_rgba(0,0,0,.12)]">
-      <div className="mb-3 flex items-center justify-between border-b border-line/40 pb-3"><div><p className="eyebrow">Conversation</p><p className="mt-1 text-xs text-muted">Captain responses arrive when a run finishes.</p></div><span className="font-mono text-[10px] text-muted">{messages.length} turns</span></div>
-      <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-        {messages.length === 0 && (
-          <Card className="p-6 text-sm text-muted">
-            Describe what you want built. The captain explores the repository first, then
-            delegates it to as many agents as the work needs.
-          </Card>
-        )}
+    <div className="flex h-full min-h-0 flex-col">
+      <h2 className="mb-3 text-sm font-medium text-muted">
+        Conversation <span className="text-xs">({messages.length})</span>
+      </h2>
 
-        {messages.map((message) => (
-          <Turn key={message.id} message={message} activeRunId={activeRunId} onSelectRun={onSelectRun} />
-        ))}
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div
+          ref={scroller}
+          onScroll={onScroll}
+          className="min-h-0 flex-1 divide-y divide-line/30 overflow-y-auto"
+        >
+          {messages.length === 0 && (
+            <p className="p-6 text-center text-sm text-muted">
+              Describe what you want built. The captain explores the repository first, then
+              delegates it to as many agents as the work needs.
+            </p>
+          )}
 
-        {busy && (
-          <div className="flex items-center gap-2 text-sm text-muted">
-            <Spinner /> queueing a captain…
-          </div>
-        )}
-      </div>
+          {messages.map((message) => (
+            <Turn
+              key={message.id}
+              message={message}
+              activeRunId={activeRunId}
+              onSelectRun={onSelectRun}
+            />
+          ))}
 
-      {error && <ErrorNote>{error}</ErrorNote>}
-
-      <form onSubmit={submit} className="mt-3 space-y-2 border-t border-line/40 pt-3">
-        <Textarea
-          rows={3}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Add a /health endpoint returning JSON status, plus a test covering it"
-        />
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted">enter sends · shift-enter for a new line</span>
-          <Button type="submit" disabled={busy || draft.trim().length === 0}>
-            {busy ? <><Spinner /> starting…</> : "Send"}
-          </Button>
+          {busy && (
+            <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted">
+              <Spinner /> queueing a captain…
+            </div>
+          )}
         </div>
-      </form>
+
+        <form onSubmit={submit} className="space-y-2 border-t border-line/40 p-3">
+          {error && <ErrorNote>{error}</ErrorNote>}
+          <Textarea
+            rows={3}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Add a /health endpoint returning JSON status, plus a test covering it"
+          />
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted">enter sends · shift-enter for a new line</span>
+            <Button type="submit" disabled={busy || draft.trim().length === 0}>
+              {busy ? <><Spinner /> starting…</> : "Send"}
+            </Button>
+          </div>
+        </form>
+      </Card>
     </div>
   );
 }
@@ -107,26 +118,26 @@ function Turn(
   const system = message.role === "system";
 
   return (
-    <Card className={cn(
-      "p-3",
-      user && "border-accent/30 bg-accent/5",
-      system && "border-line/40 bg-transparent",
+    <div className={cn(
+      "px-3 py-2 hover:bg-raised/30",
+      user && "bg-accent/5",
+      system && "bg-transparent",
     )}>
-      <div className="flex items-baseline gap-2">
+      <div className="flex items-baseline gap-2 font-mono text-[10px]">
         <span className={cn(
-          "text-xs font-medium",
+          "font-medium",
           user ? "text-accent" : system ? "text-muted" : "text-bright",
         )}>
           {user ? "you" : message.role}
         </span>
-        <span className="font-mono text-[10px] text-muted">{time(message.createdAt)}</span>
+        <span className="text-muted">{time(message.createdAt)}</span>
 
         {message.runId && (
           <button
             type="button"
             onClick={() => onSelectRun(message.runId!)}
             className={cn(
-              "ml-auto rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors",
+              "ml-auto rounded border px-1.5 py-0.5 transition-colors",
               message.runId === activeRunId
                 ? "border-accent/50 text-accent"
                 : "border-line/60 text-muted hover:border-accent/50 hover:text-accent",
@@ -137,9 +148,9 @@ function Turn(
         )}
       </div>
 
-      <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-bright/90">
+      <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-bright/90">
         {message.content}
       </p>
-    </Card>
+    </div>
   );
 }
