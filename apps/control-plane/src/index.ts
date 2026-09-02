@@ -25,7 +25,7 @@ const app = createApp({ handle, store, hub, auth, requests, vmProvider: provisio
 const operations = process.env.KAPI_OPERATIONS === "off"
   ? null : startOperations({ handle, store, hub, provisioner });
 
-const port = Number(process.env.CONTROL_PLANE_PORT ?? 8787);
+const port = Number(process.env.PORT ?? process.env.CONTROL_PLANE_PORT ?? 8787);
 const server = serve({ fetch: app.fetch, port }, () => {
   console.log(`\n  kapi control plane`);
   console.log(`  http  http://localhost:${port}`);

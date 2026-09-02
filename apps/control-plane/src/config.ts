@@ -9,7 +9,7 @@ export function validateProductionConfig(role: "api" | "worker" = "api"): void {
   const required = role === "api"
     ? ["DATABASE_URL", "KAPI_SECRET_KEY", "KAPI_SESSION_SECRET", "KAPI_ALLOWED_ORIGINS",
         "CONTROL_PLANE_PUBLIC_URL", "KAPI_WEB_URL", "WORKOS_CLIENT_ID", "WORKOS_API_KEY",
-        "WORKOS_REDIRECT_URI", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET"]
+        "WORKOS_REDIRECT_URI"]
     : ["DATABASE_URL", "KAPI_SECRET_KEY", "CONTROL_PLANE_PUBLIC_URL"];
   if (role === "worker" && process.env.VM_PROVIDER === "daytona") required.push("DAYTONA_API_KEY");
   const missing = required.filter((key) => !process.env[key]?.trim());
