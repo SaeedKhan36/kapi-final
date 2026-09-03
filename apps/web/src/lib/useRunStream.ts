@@ -1,81 +1,45 @@
 import { useEffect, useRef, useState } from "react";
-import type { RunEvent, StreamFrame } from "./types.ts";
+import type { RunEvent } from "./types.ts";
 import { apiBase } from "./api.ts";
 
 /**
- * The live run feed, resumed from a cursor.
- *
- * A run outlives any single socket - a laptop sleeps, a proxy times out, the
- * plane restarts - so this reconnects with backoff and reconnects *from the
- * last sequence number it saw*. The plane replays everything after that cursor
- * before going live again, which is what makes a dropped connection invisible
- * rather than a hole in the middle of the agent tree.
- *
- * `events.seq` is allocated under the run's row lock, so it is gap-free and
- * strictly ordered. That is the only reason a single number is a sufficient
- * resume point; a timestamp or a global id would be subject to commit races.
+ * Live run feed. Reconnects with backoff, because a run outlives any single
+ * socket and the browser should not need a refresh to keep watching.
  */
-export function useRunStream(
-  runId: string | null,
-  cursor: { current: number },
-  onEvent: (event: RunEvent) => void,
-): boolean {
+export function useRunStream(runId: string | null, onEvent: (e: RunEvent) => void) {
   const [connected, setConnected] = useState(false);
   const handler = useRef(onEvent);
   handler.current = onEvent;
 
   useEffect(() => {
-    if (!runId) {
-      setConnected(false);
-      return;
-    }
-
+    if (!runId) return;
     let socket: WebSocket | null = null;
     let retry = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout>;
     let closed = false;
 
     const connect = () => {
       if (closed) return;
-      const httpBase = apiBase || location.origin;
-      const url = `${httpBase.replace(/^http/, "ws")}/ws` +
-        `?runId=${encodeURIComponent(runId)}&cursor=${cursor.current}`;
-      socket = new WebSocket(url);
+      const target = apiBase
+        ? `${apiBase.replace(/^http/, "ws")}/ws?runId=${encodeURIComponent(runId)}`
+        : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?runId=${encodeURIComponent(runId)}`;
+      socket = new WebSocket(target);
 
       socket.onopen = () => { retry = 0; setConnected(true); };
-
       socket.onmessage = (ev) => {
-        let frame: StreamFrame;
-        try {
-          frame = JSON.parse(ev.data as string) as StreamFrame;
-        } catch {
-          return; // A malformed frame is not worth tearing the socket down for.
-        }
-        if (frame.kind !== "event") return;
-
-        // The replay boundary is inclusive of nothing, but a reconnect that
-        // races an in-flight publish can still repeat one. Ordering by seq
-        // makes both duplicates and out-of-order delivery a comparison.
-        if (frame.event.seq <= cursor.current) return;
-        cursor.current = frame.event.seq;
-        handler.current(frame.event);
+        try { handler.current(JSON.parse(ev.data) as RunEvent); } catch { /* ignore malformed frame */ }
       };
-
       socket.onclose = () => {
         setConnected(false);
         if (closed) return;
-        timer = setTimeout(connect, Math.min(8_000, 500 * 2 ** retry++));
+        timer = setTimeout(connect, Math.min(8000, 500 * 2 ** retry++));
       };
       socket.onerror = () => socket?.close();
     };
 
     connect();
-    return () => {
-      closed = true;
-      clearTimeout(timer);
-      socket?.close();
-    };
-  }, [runId, cursor]);
+    return () => { closed = true; clearTimeout(timer); socket?.close(); };
+  }, [runId]);
 
   return connected;
 }

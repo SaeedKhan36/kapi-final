@@ -11,6 +11,7 @@
     "test": "tsx src/test-ui.tsx"
   },
   "dependencies": {
+    "@tanstack/react-router": "^1.170.32",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

@@ -13,9 +13,8 @@
   --color-bad: oklch(0.68 0.19 25);
 }
 
-html, body, #root { height: 100%; }
 html, body { background: var(--color-ink); color: var(--color-bright); }
-body { margin: 0; font-feature-settings: "cv02", "cv03", "cv04"; }
+body { font-feature-settings: "cv02", "cv03", "cv04"; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
