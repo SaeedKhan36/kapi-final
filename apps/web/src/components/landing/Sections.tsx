@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link } from "~/router.tsx";
 import {
   Boxes, Check, GitBranch, Layers, Play, ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
