@@ -6,6 +6,7 @@ import type { Message, RunDetail, RunEvent, Task } from "~/lib/types.ts";
 import { Badge, Card, RoleChip, Spinner } from "~/components/ui.tsx";
 import { TaskGraphView } from "~/components/TaskGraphView.tsx";
 import { MessageFeed } from "~/components/MessageFeed.tsx";
+import { AppHeader } from "~/routes/app.tsx";
 
 export const Route = createFileRoute("/runs/$runId")({ component: RunView });
 
@@ -57,14 +58,21 @@ function RunView() {
   );
 
   if (!detail) {
-    return <div className="flex items-center gap-2 text-sm text-muted"><Spinner /> loading run…</div>;
+    return (
+      <div className="min-h-screen">
+        <AppHeader />
+        <div className="shell flex items-center gap-2 py-8 text-sm text-muted"><Spinner /> loading run…</div>
+      </div>
+    );
   }
 
   const { run } = detail;
   const contract = run.plan?.contract;
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-screen">
+      <AppHeader />
+      <div className="shell space-y-6 py-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
@@ -159,6 +167,7 @@ function RunView() {
           </h2>
           <MessageFeed messages={messages} />
         </section>
+      </div>
       </div>
     </div>
   );
