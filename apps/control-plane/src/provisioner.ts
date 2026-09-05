@@ -13,6 +13,25 @@ const AGENT_BUNDLE = fileURLToPath(
   new URL("../../agent/dist/agent.mjs", import.meta.url),
 );
 
+const AGENT_RUNTIME_ENV = [
+  "KAPI_CAPTAIN_KEEP_FULL_STEPS", "KAPI_CAPTAIN_MAX_STEPS", "KAPI_COMMAND_TIMEOUT_MS",
+  "KAPI_HEARTBEAT_MS", "KAPI_KEEP_FULL_STEPS", "KAPI_MAX_STEPS", "KAPI_MAX_TOOL_OUTPUT",
+  "KAPI_REVIEW_KEEP_FULL_STEPS", "KAPI_REVIEW_MAX_STEPS",
+] as const;
+
+function agentRuntimeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of AGENT_RUNTIME_ENV) {
+    const value = process.env[key]?.trim();
+    if (value) env[key] = value;
+  }
+  // Deterministic test agents are never a production runtime option.
+  if (process.env.NODE_ENV !== "production" && process.env.KAPI_TEST_ECHO_ROLE === "true") {
+    env.KAPI_TEST_ECHO_ROLE = "true";
+  }
+  return env;
+}
+
 export type ProvisionerOptions = {
   provider?: VmProvider;
   intervalMs?: number;
@@ -180,6 +199,7 @@ export class Provisioner {
     const url = this.#publicUrl();
     const bundle = await this.#agentBundle();
     const vmId = newId("vm");
+    const runtimeEnv = agentRuntimeEnv();
 
     // Claim the slot BEFORE creating anything: two provisioner ticks (or two
     // plane instances) must not both build a VM for the same job.
@@ -214,6 +234,7 @@ export class Provisioner {
           planeId: process.env.KAPI_PLANE_ID ?? "default",
         },
         env: {
+          ...runtimeEnv,
           [AGENT_ENV.url]: url,
           [AGENT_ENV.jobId]: job.id,
           [AGENT_ENV.runId]: job.runId,
@@ -233,6 +254,7 @@ export class Provisioner {
       await this.#provider.spawnDetached(vm.id, "node agent.mjs", {
         cwd: vm.workdir,
         env: {
+          ...runtimeEnv,
           [AGENT_ENV.url]: url,
           [AGENT_ENV.token]: token,
           [AGENT_ENV.jobId]: job.id,

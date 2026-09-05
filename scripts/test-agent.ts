@@ -199,6 +199,40 @@ await test("an evicted agent is told its lease is gone", async () => {
 
   equal(res.ok, false, "the first VM learns it must stop");
   assert(await heartbeat(handle, job.id, "vm-second"), "the new holder is fine");
+
+  const staleHeaders = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const attempts = [
+    fetch(`${base}/agent/events`, { method: "POST", headers: staleHeaders,
+      body: JSON.stringify({ events: [{ kind: "log", payload: { message: "stale" } }] }) }),
+    fetch(`${base}/agent/spawn`, { method: "POST", headers: staleHeaders,
+      body: JSON.stringify({ agents: [{ instruction: "stale child" }] }) }),
+    fetch(`${base}/agent/git-token`, { headers: staleHeaders }),
+    fetch(`${base}/agent/checkpoint`, { headers: staleHeaders }),
+  ];
+  for (const blocked of await Promise.all(attempts)) {
+    equal(blocked.status, 409, "a stale token cannot use privileged agent routes");
+  }
+});
+
+await test("the local provider does not expose control-plane secrets", async () => {
+  process.env.KAPI_TEST_HOST_SECRET = "must-not-reach-the-agent";
+  const box = await provider.create({
+    name: "sanitized-env",
+    env: { KAPI_VISIBLE_TO_AGENT: "expected" },
+  });
+  try {
+    const result = await provider.exec(
+      box.id,
+      "node -e \"console.log(JSON.stringify({visible:process.env.KAPI_VISIBLE_TO_AGENT,secret:process.env.KAPI_TEST_HOST_SECRET}))\"",
+    );
+    equal(result.exitCode, 0, "the sanitized command starts");
+    const values = JSON.parse(result.stdout.trim()) as { visible?: string; secret?: string };
+    equal(values.visible, "expected", "explicit VM environment is preserved");
+    equal(values.secret, undefined, "unlisted host environment is absent");
+  } finally {
+    delete process.env.KAPI_TEST_HOST_SECRET;
+    await provider.destroy(box.id);
+  }
 });
 
 /* ------------------------------------------------------------------ */

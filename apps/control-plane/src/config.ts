@@ -18,4 +18,8 @@ export function validateProductionConfig(role: "api" | "worker" = "api"): void {
     throw new Error("CONTROL_PLANE_PUBLIC_URL must use https in production");
   }
   if (role === "api" && allowedOrigins().length === 0) throw new Error("at least one KAPI_ALLOWED_ORIGINS value is required");
+  const runsOperations = role === "worker" || process.env.KAPI_OPERATIONS !== "off";
+  if (runsOperations && (process.env.VM_PROVIDER ?? "local") === "local") {
+    throw new Error("VM_PROVIDER=local is not allowed for production operations; use docker or daytona");
+  }
 }

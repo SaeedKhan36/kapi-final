@@ -42,6 +42,24 @@ export function createAgentApi(deps: {
     return next();
   });
 
+  // A signed token identifies the VM that was originally assigned the job; it
+  // is not itself proof that VM still owns the lease. Reapers deliberately
+  // hand jobs to replacement VMs while the old token may remain unexpired.
+  // Only claim and heartbeat have useful semantics without an active lease.
+  app.use("/agent/*", async (c, next) => {
+    if (c.req.path === "/agent/claim" || c.req.path === "/agent/heartbeat") {
+      return next();
+    }
+    const { jobId, runId, vmId } = c.get("claims");
+    const job = await getJob(handle, jobId);
+    const active = job && job.runId === runId && job.vmId === vmId &&
+      (job.status === "claimed" || job.status === "running");
+    if (!active) {
+      return c.json({ error: "job lease is no longer active" }, 409);
+    }
+    return next();
+  });
+
   // Model calls, checkpoints and git credentials. Mounted after the token
   // middleware above, so these inherit the same authentication.
   app.route("/", createModelProxy({ handle }));

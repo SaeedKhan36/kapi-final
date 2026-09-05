@@ -7,6 +7,20 @@ import type {
 } from "../types.ts";
 import { VmError } from "../types.ts";
 
+const HOST_ENV_ALLOWLIST = [
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM",
+] as const;
+
+/** Commands need a small operating-system environment, never plane credentials. */
+function commandEnvironment(...layers: Array<Record<string, string> | undefined>) {
+  const env: Record<string, string> = {};
+  for (const key of HOST_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return Object.assign(env, ...layers.filter(Boolean));
+}
+
 /**
  * Runs agents as local subprocesses in an isolated temp directory.
  *
@@ -70,7 +84,7 @@ export class LocalProvider implements VmProvider {
     return new Promise<ExecResult>((resolveExec) => {
       const child = spawn("bash", ["-lc", cmd], {
         cwd,
-        env: { ...process.env, ...this.#env.get(id), ...opts.env },
+        env: commandEnvironment(this.#env.get(id), opts.env),
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -107,7 +121,7 @@ export class LocalProvider implements VmProvider {
 
     const child = spawn("bash", ["-lc", cmd], {
       cwd,
-      env: { ...process.env, ...this.#env.get(id), ...opts.env },
+      env: commandEnvironment(this.#env.get(id), opts.env),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -170,7 +184,7 @@ export class LocalProvider implements VmProvider {
     // running but nothing happened" is exactly when you need to read it.
     const child = spawn("bash", ["-lc", `${cmd} > agent.log 2>&1 < /dev/null`], {
       cwd,
-      env: { ...process.env, ...this.#env.get(id), ...opts.env },
+      env: commandEnvironment(this.#env.get(id), opts.env),
       stdio: "ignore",
       detached: true,
     });
