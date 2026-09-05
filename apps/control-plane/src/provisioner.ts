@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import type { DbHandle } from "@kapi/db";
+import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
 import { mintJobToken, resolveAll } from "@kapi/identity";
 import { AGENT_ENV, newId, type Job } from "@kapi/protocol";
 import { toJob, type JobRow } from "@kapi/queue";
@@ -123,10 +123,8 @@ export class Provisioner {
    * at spawn time so that a captain is never told "no" for work it can
    * legitimately queue and wait for.
    *
-   * Soft across processes: two planes running at once could each read the same
-   * live count and jointly overshoot. The per-job insert below still prevents
-   * two VMs for one job, which is the part that must never happen; the cap is a
-   * spend guard, and briefly exceeding it costs money rather than correctness.
+   * This query keeps each tick small. `provision` independently reserves each
+   * slot under a run-row lock, which is the authoritative cross-process guard.
    */
   async #pending(limit = 20): Promise<Job[]> {
     const cols = JOB_COLUMNS.split(", ").join(", ");
@@ -174,7 +172,7 @@ export class Provisioner {
         limit,
         this.opts.runId ?? null,
         new Date(Date.now() - (this.opts.retryDelayMs ??
-          Number(process.env.KAPI_PROVISION_RETRY_SECONDS ?? 15) * 1000)),
+          Number(process.env.KAPI_PROVISION_RETRY_SECONDS ?? 15) * 1000)).toISOString(),
       ],
     );
     return rows.map(toJob);
@@ -220,17 +218,41 @@ export class Provisioner {
 
     // Claim the slot BEFORE creating anything: two provisioner ticks (or two
     // plane instances) must not both build a VM for the same job.
-    const claimed = await this.handle.raw<{ job_id: string }>(
-      `INSERT INTO agents (job_id, run_id, role, status, vm_id, provider, last_heartbeat)
-       VALUES ($1, $2, $3, 'provisioning', $4, $5, now())
-       ON CONFLICT (job_id) DO UPDATE
-         SET status = 'provisioning', vm_id = EXCLUDED.vm_id,
-             stopped_at = NULL, last_heartbeat = now()
-         WHERE agents.stopped_at IS NOT NULL
-       RETURNING job_id`,
-      [job.id, job.runId, job.role, vmId, this.#provider.name],
-    );
-    if (claimed.length === 0) throw new Error("another provisioner already has this job");
+    const claimed = await retryDeadlockedTransaction(this.handle, async (tx) => {
+      const runs = await tx<{
+        status: string; max_concurrent_vms: number; vm_seconds: number;
+        max_vm_seconds: number; cost_status: string; usd_cents: number; max_usd_cents: number;
+      }>(
+        `SELECT status,max_concurrent_vms,vm_seconds,max_vm_seconds,
+                cost_status,usd_cents,max_usd_cents
+         FROM runs WHERE id=$1 FOR UPDATE`,
+        [job.runId],
+      );
+      const run = runs[0];
+      if (!run || ["completed", "failed", "cancelled"].includes(run.status)) return [];
+      const live = await tx<{ n: number }>(
+        `SELECT count(*)::int AS n FROM agents WHERE run_id=$1 AND stopped_at IS NULL`,
+        [job.runId],
+      );
+      const hasCapacity = Number(live[0]?.n ?? 0) < Number(run.max_concurrent_vms) &&
+        Number(run.vm_seconds) < Number(run.max_vm_seconds) &&
+        (run.cost_status === "unavailable" || Number(run.usd_cents) < Number(run.max_usd_cents));
+      if (!hasCapacity) return [];
+
+      return tx<{ job_id: string }>(
+        `INSERT INTO agents (job_id, run_id, role, status, vm_id, provider, last_heartbeat)
+         VALUES ($1, $2, $3, 'provisioning', $4, $5, now())
+         ON CONFLICT (job_id) DO UPDATE
+           SET status = 'provisioning', vm_id = EXCLUDED.vm_id,
+               stopped_at = NULL, last_heartbeat = now()
+           WHERE agents.stopped_at IS NOT NULL
+         RETURNING job_id`,
+        [job.id, job.runId, job.role, vmId, this.#provider.name],
+      );
+    });
+    if (claimed.length === 0) {
+      throw new Error("no VM slot is available or another provisioner already reserved this job");
+    }
 
     const idleTtl = job.payload.vmSpec?.idleTtlSeconds
       ?? Number(process.env.VM_IDLE_TTL_SECONDS ?? 900);
@@ -356,7 +378,7 @@ export class Provisioner {
          AND COALESCE(a.last_heartbeat, a.started_at) <= $2
          AND ($3::text IS NULL OR a.run_id = $3::text)
        RETURNING a.job_id, a.vm_id`,
-      [now, cutoff, this.opts.runId ?? null],
+      [now.toISOString(), cutoff.toISOString(), this.opts.runId ?? null],
     );
     for (const row of rows) {
       if (row.vm_id) await this.#destroyVm(row.job_id, row.vm_id);

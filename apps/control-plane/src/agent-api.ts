@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { DbHandle } from "@kapi/db";
+import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
 import { JobTokenError, verifyJobToken, type JobTokenClaims } from "@kapi/identity";
 import {
   AgentCancelRequestSchema, AgentCompleteRequestSchema, AgentEventsRequestSchema,
@@ -8,7 +8,7 @@ import {
   type SpawnedAgent, type SpawnRefusal,
 } from "@kapi/protocol";
 import {
-  appendEvent, cancelSubtree, claim, complete, enqueue, fail, getJob, heartbeat,
+  appendEvent, cancelSubtree, claim, complete, enqueueIn, fail, getJob, heartbeat,
   markRunning, toJob, JOB_COLUMNS, type JobRow,
 } from "@kapi/queue";
 import type { Store } from "./store.ts";
@@ -246,9 +246,6 @@ export function createAgentApi(deps: {
       return c.json({ error: "invalid spawn request", issues: parsed.error.issues }, 400);
     }
 
-    const run = await store.getRun(runId);
-    if (!run) return c.json({ error: "run not found" }, 404);
-
     // repoUrl/baseBranch are how a job finds the repo to clone, and a spawned
     // child sees nothing of the conversation that decided to create it - only
     // what lands in its own context. Without inheriting the parent's here,
@@ -261,80 +258,100 @@ export function createAgentApi(deps: {
     if (parentContext.repoUrl) inheritedContext.repoUrl = parentContext.repoUrl;
     if (parentContext.baseBranch) inheritedContext.baseBranch = parentContext.baseBranch;
 
-    const before = run.eventSeq;
     const depth = (await depthOf(jobId)) + 1;
-    const budget = {
-      totalSpawns: run.totalSpawns,
-      maxTotalSpawns: run.maxTotalSpawns,
-      depth,
-      maxSpawnDepth: run.maxSpawnDepth,
-    };
+    const result = await retryDeadlockedTransaction(handle, async (tx) => {
+      // The run row is the budget mutex. Every plane that serves a concurrent
+      // spawn request waits here, then observes the total committed by the
+      // preceding request before deciding how many jobs it may create.
+      const rows = await tx<{
+        status: string; event_seq: number; total_spawns: number;
+        max_total_spawns: number; max_spawn_depth: number;
+      }>(
+        `SELECT status,event_seq,total_spawns,max_total_spawns,max_spawn_depth
+         FROM runs WHERE id=$1 FOR UPDATE`,
+        [runId],
+      );
+      const run = rows[0];
+      if (!run) return null;
 
-    const spawned: SpawnedAgent[] = [];
-    const refused: SpawnRefusal[] = [];
+      const before = Number(run.event_seq);
+      const totalSpawns = Number(run.total_spawns);
+      const maxTotalSpawns = Number(run.max_total_spawns);
+      const maxSpawnDepth = Number(run.max_spawn_depth);
+      const spawned: SpawnedAgent[] = [];
+      const refused: SpawnRefusal[] = [];
+      let remaining = Math.max(0, maxTotalSpawns - totalSpawns);
 
-    // Soft across processes, like the VM cap: two planes could each read the
-    // same total and jointly overshoot. It is a spend guard, and overshooting
-    // it costs money rather than correctness.
-    let remaining = Math.max(0, run.maxTotalSpawns - run.totalSpawns);
+      for (const want of parsed.data.agents) {
+        if (["completed", "failed", "cancelled"].includes(run.status)) {
+          refused.push({
+            role: want.role, instruction: want.instruction,
+            reason: `the run is already ${run.status}; no more agents can be created.`,
+          });
+          continue;
+        }
+        if (depth > maxSpawnDepth) {
+          refused.push({
+            role: want.role, instruction: want.instruction,
+            reason: `spawn depth ${depth} exceeds this run's limit of ${maxSpawnDepth}. ` +
+                    `Do this work yourself rather than delegating it further.`,
+          });
+          continue;
+        }
+        if (remaining <= 0) {
+          refused.push({
+            role: want.role, instruction: want.instruction,
+            reason: `the run's total spawn budget of ${maxTotalSpawns} is used up. ` +
+                    `No more agents can be created; finish with what is already running.`,
+          });
+          continue;
+        }
 
-    for (const want of parsed.data.agents) {
-      if (depth > run.maxSpawnDepth) {
-        refused.push({
-          role: want.role, instruction: want.instruction,
-          reason: `spawn depth ${depth} exceeds this run's limit of ${run.maxSpawnDepth}. ` +
-                  `Do this work yourself rather than delegating it further.`,
+        const child = await enqueueIn(tx, {
+          runId,
+          parentJobId: jobId,
+          kind: want.kind,
+          role: want.role,
+          instruction: want.instruction,
+          acceptance: want.acceptance,
+          touches: want.touches,
+          dependsOn: want.dependsOn,
+          priority: want.priority,
+          maxAttempts: 3,
+          secrets: want.secrets,
+          // The spawner's own context wins on conflict - it is free to hand a
+          // child a different repo on purpose, this just stops "nothing at all"
+          // from being the default.
+          context: { ...inheritedContext, ...want.context },
         });
-        continue;
-      }
-      if (remaining <= 0) {
-        refused.push({
-          role: want.role, instruction: want.instruction,
-          reason: `the run's total spawn budget of ${run.maxTotalSpawns} is used up. ` +
-                  `No more agents can be created; finish with what is already running.`,
-        });
-        continue;
-      }
+        remaining--;
 
-      const job = await enqueue(handle, {
-        runId,
-        parentJobId: jobId,
-        kind: want.kind,
-        role: want.role,
-        instruction: want.instruction,
-        acceptance: want.acceptance,
-        touches: want.touches,
-        dependsOn: want.dependsOn,
-        priority: want.priority,
-        maxAttempts: 3,
-        secrets: want.secrets,
-        // The spawner's own context wins on conflict - it is free to hand a
-        // child a different repo on purpose, this just stops "nothing at all"
-        // from being the default.
-        context: { ...inheritedContext, ...want.context },
-      });
-      remaining--;
-
-      await handle.transaction(async (tx) => {
         await appendEvent(tx, {
-          runId, jobId: job.id, kind: "agent.spawned", from: agentId(jobId),
+          runId, jobId: child.id, kind: "agent.spawned", from: agentId(jobId),
           payload: {
-            childJobId: job.id, kind: job.kind, role: job.role,
-            instruction: job.payload.instruction, touches: job.payload.touches,
+            childJobId: child.id, kind: child.kind, role: child.role,
+            instruction: child.payload.instruction, touches: child.payload.touches,
           },
         });
-      });
+        spawned.push({
+          jobId: child.id, kind: child.kind, role: child.role,
+          instruction: child.payload.instruction,
+        });
+      }
 
-      spawned.push({
-        jobId: job.id, kind: job.kind, role: job.role,
-        instruction: job.payload.instruction,
-      });
-    }
+      return {
+        before, spawned, refused,
+        budget: {
+          totalSpawns: totalSpawns + spawned.length, maxTotalSpawns,
+          depth, maxSpawnDepth,
+        },
+      };
+    });
+    if (!result) return c.json({ error: "run not found" }, 404);
 
-    await flush(runId, before);
+    await flush(runId, result.before);
     return c.json({
-      spawned, refused,
-      budget: { ...budget, totalSpawns: budget.totalSpawns + spawned.length },
+      spawned: result.spawned, refused: result.refused, budget: result.budget,
     });
   });
 

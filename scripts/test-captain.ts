@@ -247,6 +247,22 @@ await test("the total spawn budget refuses further agents and says why", async (
   assert(res.ok !== false, "a partial refusal is still a usable result");
 });
 
+await test("concurrent spawn requests cannot overshoot the total budget", async () => {
+  // The root uses one slot, leaving exactly two. These requests race through
+  // separate HTTP transactions, as they would across control-plane replicas.
+  const cap = await captainOnRun({ maxTotalSpawns: 3 });
+  const responses = await Promise.all(
+    Array.from({ length: 6 }, (_, index) => cap.fleet.spawn([want({ instruction: `race ${index}` })])),
+  );
+  const created = responses.reduce((sum, response) => sum + response.spawned.length, 0);
+  equal(created, 2, "only the two remaining slots were allocated");
+  const children = (await listJobs(handle, cap.seeded.runId))
+    .filter((job) => job.parentJobId === cap.job.id);
+  equal(children.length, 2, "the durable job count matches the budget");
+  const run = await store.getRun(cap.seeded.runId);
+  equal(run?.totalSpawns, 3, "the counter cannot cross its configured maximum");
+});
+
 await test("the depth budget stops delegation from nesting forever", async () => {
   // maxSpawnDepth counts levels below the root captain, so 1 permits its own
   // children and refuses theirs. The refusal has to land on the sub-captain,

@@ -321,7 +321,7 @@ await test("an agent that never claims is destroyed and its job becomes retryabl
   await handle.raw(
     `INSERT INTO agents (job_id,run_id,role,status,vm_id,provider,last_heartbeat)
      VALUES ($1,$2,'backend','provisioning',$3,'local',$4)`,
-    [job.id, s.runId, silent.id, new Date(Date.now() - 60_000)],
+    [job.id, s.runId, silent.id, new Date(Date.now() - 60_000).toISOString()],
   );
   const recovery = new Provisioner(handle, {
     provider, publicUrl: base, runId: s.runId,
@@ -352,6 +352,38 @@ await test("the concurrency budget caps how many VMs a run gets at once", async 
   const started = await provisioner.tick();
   const forRun = started.filter((j) => j.runId === s.runId);
   assert(forRun.length <= 2, `budget honoured, started ${forRun.length}`);
+});
+
+await test("two provisioner instances cannot reserve the same run's last VM slot", async () => {
+  const s = await seedRun(handle);
+  await handle.raw(`UPDATE runs SET max_concurrent_vms=1 WHERE id=$1`, [s.runId]);
+  const first = await echoJob(s.runId, { instruction: "first capacity contender" });
+  const second = await echoJob(s.runId, { instruction: "second capacity contender" });
+
+  class CountingProvider implements VmProvider {
+    readonly name = "capacity-test";
+    creates = 0;
+    async isAvailable() { return true; }
+    async create(): Promise<Vm> {
+      this.creates++;
+      return { id: `vm-capacity-${this.creates}`, provider: this.name, workdir: "/workspace", createdAt: Date.now() };
+    }
+    async exec() { return { exitCode: 0, stdout: "", stderr: "", durationMs: 0 }; }
+    async *execStream() { /* no output */ }
+    async writeFile() {} async readFile() { return ""; }
+    async spawnDetached() {} async destroy() {}
+  }
+  const shared = new CountingProvider();
+  const a = new Provisioner(handle, { provider: shared, publicUrl: base, runId: s.runId, onLog: () => {} });
+  const b = new Provisioner(handle, { provider: shared, publicUrl: base, runId: s.runId, onLog: () => {} });
+  const outcomes = await Promise.allSettled([a.provision(first), b.provision(second)]);
+
+  equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1, "one reservation won");
+  equal(shared.creates, 1, "capacity was checked before creating a second VM");
+  const live = await handle.raw<{ n: number }>(
+    `SELECT count(*)::int AS n FROM agents WHERE run_id=$1 AND stopped_at IS NULL`, [s.runId],
+  );
+  equal(Number(live[0]?.n), 1, "one live agent row owns the one allowed slot");
 });
 
 await test("a finished job's VM is reclaimed", async () => {
