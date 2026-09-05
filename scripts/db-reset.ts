@@ -16,6 +16,6 @@ if (!handle.embedded && !force) {
   process.exit(1);
 }
 
-await truncateAll(handle);
+await truncateAll(handle, { allowExternal: true });
 console.log(`\n  wiped ${handle.target}\n`);
 await handle.close();

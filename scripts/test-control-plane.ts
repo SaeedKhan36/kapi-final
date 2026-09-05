@@ -3,7 +3,6 @@ loadEnv();
 
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import { createDb, truncateAll } from "@kapi/db";
 import { Authenticator, mintJobToken } from "@kapi/identity";
 import { claim, enqueue, getJob, reap } from "@kapi/queue";
 import { createApp } from "../apps/control-plane/src/app.ts";
@@ -12,15 +11,16 @@ import { Store } from "../apps/control-plane/src/store.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { attachWebSocket } from "../apps/control-plane/src/ws.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
+import { createTestDb, useHermeticTestConfig } from "./test-db.ts";
 
-if (!process.env.DATABASE_URL) process.env.KAPI_PGLITE_DIR = "memory://cp-test";
+useHermeticTestConfig();
 if (!process.env.KAPI_SECRET_KEY) {
   process.env.KAPI_SECRET_KEY = Buffer.alloc(32, 7).toString("base64");
 }
 
-const handle = await createDb();
+const testDb = await createTestDb("control_plane");
+const { handle } = testDb;
 console.log(`\n  database: ${handle.target}`);
-await truncateAll(handle);
 
 const store = new Store(handle);
 const hub = new EventHub(store, handle, 250);
@@ -615,5 +615,5 @@ await test("a secret can be deleted", async () => {
 wss.close();
 await hub.close();
 await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
-await handle.close();
+await testDb.close();
 report();

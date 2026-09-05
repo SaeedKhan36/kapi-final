@@ -1,4 +1,4 @@
-import { createDb, truncateAll } from "@kapi/db";
+import { createDb, truncateAll, type DbHandle } from "@kapi/db";
 import { newId } from "@kapi/protocol";
 import { claim, complete, enqueue, listJobs, markRunning } from "@kapi/queue";
 import type { ManagedVm, Vm, VmProvider, VmSpec } from "@kapi/vm";
@@ -19,6 +19,20 @@ await handle.raw(
 );
 const project = await store.createProject({
   ownerId: "usr_ops", name: "operations", repoUrl: "https://github.com/kapi/ops.git",
+});
+
+group("database safety");
+
+await test("whole-database truncation requires an explicit external opt-in", async () => {
+  let statements = 0;
+  const external = {
+    embedded: false,
+    exec: async () => { statements++; },
+  } as unknown as DbHandle;
+  await throws(() => truncateAll(external), "external truncation is refused");
+  equal(statements, 0, "the guard stops before executing SQL");
+  await truncateAll(external, { allowExternal: true });
+  equal(statements, 1, "the reset CLI can opt in after its own confirmation");
 });
 
 group("scheduler");

@@ -270,7 +270,20 @@ export function describeDbTarget(url = process.env.DATABASE_URL): string {
   }
 }
 
-/** Wipes every table. Test setup and `pnpm db:reset`. */
-export async function truncateAll(handle: DbHandle): Promise<void> {
+/**
+ * Wipes every application table.
+ *
+ * Embedded databases are disposable. External Postgres is not: callers must
+ * opt in explicitly after performing their own safety checks.
+ */
+export async function truncateAll(
+  handle: DbHandle,
+  options: { allowExternal?: boolean } = {},
+): Promise<void> {
+  if (!handle.embedded && !options.allowExternal) {
+    throw new Error(
+      "refusing to truncate an external Postgres database without allowExternal: true",
+    );
+  }
   await handle.exec(`TRUNCATE ${TABLES.join(", ")} RESTART IDENTITY CASCADE;`);
 }

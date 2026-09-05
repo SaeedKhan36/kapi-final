@@ -6,7 +6,6 @@ import { mkdtemp } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDb, truncateAll } from "@kapi/db";
 import { Authenticator, mintJobToken } from "@kapi/identity";
 import type {
   AgentChildrenResponse, AgentInboxMessage, AgentSpawnResponse,
@@ -23,15 +22,16 @@ import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
 import { assert, equal, group, report, test } from "./harness.ts";
 import { seedRun } from "./seed.ts";
+import { createTestDb, useHermeticTestConfig } from "./test-db.ts";
 
-if (!process.env.DATABASE_URL) process.env.KAPI_PGLITE_DIR = "memory://captain-test";
+useHermeticTestConfig();
 if (!process.env.KAPI_SECRET_KEY) {
   process.env.KAPI_SECRET_KEY = Buffer.alloc(32, 11).toString("base64");
 }
 
-const handle = await createDb();
+const testDb = await createTestDb("captain");
+const { handle } = testDb;
 console.log(`\n  database: ${handle.target}`);
-await truncateAll(handle);
 
 const store = new Store(handle);
 const hub = new EventHub(store, handle, 250);
@@ -678,5 +678,5 @@ await test("a refused spawn is reported to the model rather than thrown", async 
 
 await hub.close();
 await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
-await handle.close();
+await testDb.close();
 report();

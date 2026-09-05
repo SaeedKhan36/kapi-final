@@ -4,22 +4,21 @@ loadEnv();
 import { z } from "zod";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModel } from "ai";
-import { createDb, truncateAll } from "@kapi/db";
 import {
   BudgetExceededError, ModelRouter, NoModelAvailableError, classifyFailure,
   codexHeaders, createPkce, authorizationUrl, loadGrant, saveGrant, markGrantRevoked, modelsFor,
 } from "@kapi/llm";
 import { assert, equal, group, report, test } from "./harness.ts";
 import { seedRun } from "./seed.ts";
+import { createTestDb } from "./test-db.ts";
 
-if (!process.env.DATABASE_URL) process.env.KAPI_PGLITE_DIR = "memory://llm-test";
 if (!process.env.KAPI_SECRET_KEY) {
   process.env.KAPI_SECRET_KEY = Buffer.alloc(32, 3).toString("base64");
 }
 
-const handle = await createDb();
+const testDb = await createTestDb("llm");
+const { handle } = testDb;
 console.log(`\n  database: ${handle.target}`);
-await truncateAll(handle);
 
 /** A model that answers, or throws whatever the test wants classified. */
 function mock(opts: { text?: string; throws?: unknown; tag?: string }): LanguageModel {
@@ -252,5 +251,5 @@ await test("a revoked grant stops being offered", async () => {
   equal(await loadGrant(handle, s.userId), null, "a revoked connection reads as absent");
 });
 
-await handle.close();
+await testDb.close();
 report();

@@ -3,7 +3,6 @@ loadEnv();
 
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import { createDb, truncateAll } from "@kapi/db";
 import { Authenticator, JobTokenError, mintJobToken, verifyJobToken } from "@kapi/identity";
 import { claim, enqueue, getJob, heartbeat, reap } from "@kapi/queue";
 import { LocalProvider } from "@kapi/vm";
@@ -14,8 +13,9 @@ import { RequestTracker } from "../apps/control-plane/src/request-tracker.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
 import { seedRun } from "./seed.ts";
+import { createTestDb, useHermeticTestConfig } from "./test-db.ts";
 
-if (!process.env.DATABASE_URL) process.env.KAPI_PGLITE_DIR = "memory://agent-test";
+useHermeticTestConfig();
 if (!process.env.KAPI_SECRET_KEY) {
   process.env.KAPI_SECRET_KEY = Buffer.alloc(32, 9).toString("base64");
 }
@@ -24,9 +24,9 @@ if (!process.env.KAPI_SECRET_KEY) {
 // agents select the deterministic echo handler.
 process.env.KAPI_TEST_ECHO_ROLE = "true";
 
-const handle = await createDb();
+const testDb = await createTestDb("agent");
+const { handle } = testDb;
 console.log(`\n  database: ${handle.target}`);
-await truncateAll(handle);
 
 const store = new Store(handle);
 const hub = new EventHub(store, handle, 250);
@@ -322,5 +322,5 @@ await provisioner.destroyAll();
 await hub.close();
 await requests.drain();
 await serverClosed;
-await handle.close();
+await testDb.close();
 report();
