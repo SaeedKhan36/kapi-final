@@ -254,9 +254,8 @@ export class ModelRouter {
    * Text generation, with native tool calling.
    *
    * Tools go through the AI SDK rather than being parsed out of prose. kapi-old
-   * asked the model for a JSON action batch and parsed it by hand because the
-   * free tier made every request precious; native tool calls remove that whole
-   * class of parsing failure.
+   * asked the model for a JSON action batch and parsed it by hand; native tool
+   * calls remove that whole class of parsing failure.
    *
    * The options are spelled out rather than derived from the AI SDK's own type,
    * which is generic over the tool set and collapses to its defaults under

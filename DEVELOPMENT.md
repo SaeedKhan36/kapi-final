@@ -12,9 +12,10 @@ pnpm db:migrate
 pnpm verify
 ```
 
-With `DATABASE_URL` unset, application development uses embedded PGlite. The queue stress
-suite intentionally requires real PostgreSQL because PGlite serializes transactions and
-cannot prove `FOR UPDATE SKIP LOCKED` behavior.
+With `DATABASE_URL` unset, application development and the deterministic verification gate
+use embedded PGlite. The queue suite skips only its labelled contention cases because
+PGlite serializes transactions and cannot prove `FOR UPDATE SKIP LOCKED` behavior. GitHub CI
+always runs those cases against PostgreSQL 16.
 
 For a disposable local database:
 
@@ -26,8 +27,10 @@ pnpm db:migrate
 pnpm verify
 ```
 
-The real-Postgres queue suite creates and removes a unique `kapi_test_*` schema for each
-process. Concurrent test runs therefore cannot truncate or claim each other's work.
+Every backend suite that sees `DATABASE_URL` creates and removes its own unique
+`kapi_test_*` schema. Concurrent test runs therefore cannot truncate application data or
+claim each other's work. With no URL, each suite gets an independent in-memory PGlite
+database.
 
 ## Verification commands
 

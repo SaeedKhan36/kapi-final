@@ -38,7 +38,10 @@ export function match(path: string, pattern: string): Record<string, string> | n
   const params: Record<string, string> = {};
   for (const [i, segment] of shape.entries()) {
     const actual = parts[i]!;
-    if (segment.startsWith(":")) params[segment.slice(1)] = decodeURIComponent(actual);
+    if (segment.startsWith(":")) {
+      try { params[segment.slice(1)] = decodeURIComponent(actual); }
+      catch { return null; }
+    }
     else if (segment !== actual) return null;
   }
   return params;

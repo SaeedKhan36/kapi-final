@@ -67,6 +67,9 @@ export function createGithubWebhookRoutes(deps: {
   app.post("/webhooks/github", async (c) => {
     const body = await c.req.text();
     const secret = process.env.GITHUB_WEBHOOK_SECRET?.trim();
+    if (process.env.NODE_ENV === "production" && !secret) {
+      return c.json({ error: "GitHub webhook authentication is not configured" }, 503);
+    }
     if (secret && !validGithubSignature(body, c.req.header("x-hub-signature-256"), secret)) {
       return c.json({ error: "invalid GitHub webhook signature" }, 401);
     }

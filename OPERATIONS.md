@@ -4,8 +4,9 @@
 
 `render.yaml` creates managed Postgres, a public API service, a private operations worker,
 and the static React UI. The API runs with `KAPI_OPERATIONS=off`; only the worker schedules,
-reaps, meters, reconciles, and provisions. All queue and scheduler claims are database-locked,
-so a temporary second worker remains safe during a rolling deploy.
+reaps, meters, reconciles, and provisions. Queue and scheduler claims are database-locked,
+and spawn/VM budgets use the run row as a cross-replica mutex, so a temporary second worker
+remains safe during a rolling deploy.
 
 `pnpm db:migrate` runs as Render's API `preDeployCommand` and is the only production schema
 writer. API and worker startup call the connect/verify path: if the pre-deploy migration is
@@ -23,6 +24,18 @@ Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
 3. Confirm queue, VM, usage, and orphan audit metrics. Enable the scheduler.
 4. After at least one orphan grace window without false positives, set
    `KAPI_RECONCILE_DELETE=true`.
+
+After each stage, run:
+
+```bash
+KAPI_SMOKE_URL=https://api.example.com \
+KAPI_METRICS_TOKEN=... \
+KAPI_SMOKE_REQUIRE_PRODUCTION=true pnpm test:smoke
+```
+
+For authenticated read-path coverage, add a short-lived test-session cookie through
+`KAPI_SMOKE_COOKIE`; optionally set `KAPI_SMOKE_PROJECT_ID` to verify project and GitHub App
+readiness. Keep the cookie in the deployment secret store, never in shell history or CI logs.
 
 Migrations are forward-compatible column/table additions. To roll application code back,
 redeploy the prior image and leave the added schema in place. Never manually delete a
@@ -53,6 +66,10 @@ failure, scheduler lag over 120 seconds, any sustained expired-lease growth, fai
 orphan detection, reconciliation deletion failure, VM counts above budget, webhook
 signature failures, and model/VM budget exhaustion. Logs are JSON and carry request IDs;
 run, job, and agent identifiers are included in domain events.
+
+The provisioner releases and destroys a VM that does not claim its queued job within
+`KAPI_PROVISION_TIMEOUT_SECONDS` (default 120), then waits
+`KAPI_PROVISION_RETRY_SECONDS` (default 15) before retrying provisioning failures.
 
 ## Incident response
 

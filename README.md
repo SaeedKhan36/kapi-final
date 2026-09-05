@@ -304,11 +304,11 @@ connection error so the user can sign in again; it never falls through to anothe
 
 ### Budgets
 
-A captain can spawn without limit — that is the point of the architecture, and also how an
-unbounded bill happens. Concurrency is capped by VM budget. Total spend is capped by two
-different things: `KAPI_MAX_LLM_REQUESTS` globally, and the run's own `max_tokens` column.
-Both are checked *before* each call rather than after, because the point is not to make the
-request that crosses the line.
+A captain can keep delegating as evidence arrives, but every run has transactional limits on
+total spawns, spawn depth, and concurrently live VMs. Model spend is capped separately by
+request and token budgets. These limits are checked before allocation or model calls, and
+concurrent control-plane/worker replicas serialize on the run row so they cannot jointly
+overshoot a configured budget.
 
 Requests, tokens, aggregate VM-seconds, and provider cost are metered per run. Codex
 subscription tokens are never assigned invented dollar prices. `max_usd_cents` is enforced
@@ -340,8 +340,10 @@ dev shortcut ends up deployed, so this one says so out loud.
 ### Secrets
 
 Encrypted with AES-256-GCM under `KAPI_SECRET_KEY`. There is no route and no function that
-returns a stored value to a caller — listings return names and scopes only. The single
-egress is `resolve()`, which the plane will call to inject credentials into a VM.
+returns a stored value to a browser — listings return names and scopes only. A captain may
+name the exact vault variables a worker needs in `spawn_agents`; the provisioner resolves
+only those names and injects their plaintext directly into that worker VM. Secret values are
+never persisted in job payloads or events.
 
 Scope precedence is **task → project → user**, narrowest first. This remains available for
 non-model integrations such as source control; model credentials bypass this vault and come
@@ -380,12 +382,10 @@ function.
 That second path is the one that matters. Without it a reaped root leaves a run queued with a
 null `finished_at` forever: a live-looking run in the UI that nothing will ever resolve, under
 exactly the failure this design claims to survive. Ending a run also writes the captain's
-closing summary into the thread as a turn, in the same transaction as the status — a thread
-you can only talk into is not a conversation.
-
-Both transitions are a single guarded `UPDATE ... WHERE`, so the HTTP path and the reaper can
-race freely: the loser's statement matches nothing. A run is never announced running twice,
-never walked backwards out of a terminal state, and never finished twice.
+closing summary into the thread as a turn and cancels every unfinished descendant in the
+same transaction. User cancellation similarly closes the run, its jobs, agents, schedule
+state, and events atomically. Guarded terminal updates and deadlock retries make concurrent
+completion, cancellation, and spawning converge without live orphan work.
 
 ## Why not the previous version
 
@@ -404,7 +404,7 @@ Both failures are resolved by the same durable queue and live-Captain foundation
 ## Testing
 
 ```bash
-pnpm verify         # complete release-candidate gate
+pnpm verify         # complete local gate; skips only real-Postgres contention when DB is unset
 pnpm test:backend   # protocol, roles, control plane, operations, VM, LLM and agent-core
 pnpm test:queue     # real-Postgres contention, leases and event consistency
 pnpm test:ui        # deterministic web component states
@@ -420,10 +420,11 @@ pnpm run:agent --kind=captain --role=captain --repo=<path|url> \
   --goal="two independent changes - delegate them to separate agents"
 ```
 
-The queue's **concurrency tests require real Postgres and refuse to run on PGlite.** PGlite
-is single-process, so its transactions serialise and `FOR UPDATE SKIP LOCKED` is never
-contended — a green run there would prove nothing about the one part of this phase with
-genuine concurrency risk. Point `DATABASE_URL` at any scratch Postgres:
+The queue suite runs its lifecycle coverage on PGlite, but clearly skips its
+**real-concurrency cases** there. PGlite is single-process, so its transactions serialise and
+cannot prove `FOR UPDATE SKIP LOCKED` or cross-replica budget locking. CI always supplies
+PostgreSQL 16. To run that same contention gate locally, point `DATABASE_URL` at scratch
+Postgres:
 
 ```bash
 docker run -d --name kapi-pg -p 5432:5432 -e POSTGRES_PASSWORD=kapi postgres:16
@@ -439,8 +440,8 @@ fresh-clone and CI commands. Requires Node 22+ and pnpm 10.30.0.
 
 - Implemented and locally verified: control plane, adaptive roles, queue recovery,
   setup/workbench UI, scheduling, accounting, reconciliation and CI baseline.
-- Next: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence.
+- Next external gate: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence using
+  `KAPI_SMOKE_REQUIRE_PRODUCTION=true pnpm test:smoke` after deployment.
 - Then: Render staging, controlled production canaries/restore, and final GA hardening.
 
 A run ends at an open pull request. **Merging is always a human decision.**
-# kapi-final

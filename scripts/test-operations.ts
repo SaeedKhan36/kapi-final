@@ -8,6 +8,7 @@ import { Scheduler, nextOccurrence } from "../apps/control-plane/src/scheduler.t
 import { UsageAccounting } from "../apps/control-plane/src/accounting.ts";
 import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
+import { validateProductionConfig } from "../apps/control-plane/src/config.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
 
 process.env.KAPI_PGLITE_DIR = "memory://operations-test";
@@ -33,6 +34,60 @@ await test("whole-database truncation requires an explicit external opt-in", asy
   equal(statements, 0, "the guard stops before executing SQL");
   await truncateAll(external, { allowExternal: true });
   equal(statements, 1, "the reset CLI can opt in after its own confirmation");
+});
+
+group("production configuration");
+
+const productionApiEnv = (): NodeJS.ProcessEnv => ({
+  NODE_ENV: "production",
+  DATABASE_URL: "postgres://database.invalid/kapi",
+  KAPI_SECRET_KEY: Buffer.alloc(32, 4).toString("base64"),
+  KAPI_SESSION_SECRET: "a-session-secret-that-is-at-least-32-characters",
+  KAPI_ALLOWED_ORIGINS: "https://app.example.com",
+  KAPI_WEB_URL: "https://app.example.com",
+  CONTROL_PLANE_PUBLIC_URL: "https://api.example.com",
+  WORKOS_CLIENT_ID: "client_test",
+  WORKOS_API_KEY: "sk_test",
+  WORKOS_REDIRECT_URI: "https://api.example.com/auth/callback",
+  KAPI_METRICS_TOKEN: "metrics-test-token",
+  GITHUB_WEBHOOK_SECRET: "webhook-test-secret",
+  KAPI_OPERATIONS: "off",
+});
+
+await test("a complete production API configuration passes validation", () => {
+  validateProductionConfig("api", productionApiEnv());
+});
+
+await test("production never exposes unsigned metrics or GitHub webhooks", async () => {
+  const noMetrics = productionApiEnv();
+  delete noMetrics.KAPI_METRICS_TOKEN;
+  await throws(() => validateProductionConfig("api", noMetrics), "metrics token is required");
+
+  const unsignedGithub: NodeJS.ProcessEnv = {
+    ...productionApiEnv(), GITHUB_APP_ID: "123", GITHUB_APP_PRIVATE_KEY: "encoded-key",
+  };
+  delete unsignedGithub.GITHUB_WEBHOOK_SECRET;
+  await throws(
+    () => validateProductionConfig("api", unsignedGithub),
+    "a configured GitHub App requires webhook signatures",
+  );
+});
+
+await test("production URLs, origins, and encryption keys are hardened", async () => {
+  await throws(
+    () => validateProductionConfig("api", { ...productionApiEnv(), KAPI_WEB_URL: "http://app.example.com" }),
+    "plain HTTP web URL",
+  );
+  await throws(
+    () => validateProductionConfig("api", {
+      ...productionApiEnv(), KAPI_ALLOWED_ORIGINS: "https://other.example.com",
+    }),
+    "the deployed web origin must be allowed",
+  );
+  await throws(
+    () => validateProductionConfig("api", { ...productionApiEnv(), KAPI_SECRET_KEY: "too-short" }),
+    "the vault key must be 256-bit",
+  );
 });
 
 group("scheduler");

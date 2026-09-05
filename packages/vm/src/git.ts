@@ -35,7 +35,7 @@ export const redact = (text: string, ...secrets: Array<string | undefined>): str
 
 /**
  * Shallow-clones a repo into a sandbox and configures identity.
- * `depth` keeps clones fast; the master only ever needs a read-only view.
+ * `depth` keeps clones fast; the Captain only ever needs a read-only view.
  */
 export async function cloneRepo(
   provider: VmProvider,

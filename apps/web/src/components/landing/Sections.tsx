@@ -2,7 +2,6 @@ import { Link } from "~/router.tsx";
 import {
   Boxes, Check, GitBranch, Layers, Play, ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
-import type { ReactNode } from "react";
 import { GithubMark, Logo } from "../Logo.tsx";
 
 const REPO = "https://github.com/SaeedKhan36/Kapi";
@@ -61,7 +60,7 @@ export function MarketingFooter() {
       <div className="shell flex flex-col items-center justify-between gap-4 sm:flex-row">
         <Logo />
         <p className="text-xs text-dim">
-          Free and open source. Inspired by capy.ai, built to run on free tiers.
+          Open source, budget-aware, and built around isolated agent work.
         </p>
         <a
           href={REPO}
@@ -96,8 +95,8 @@ export function Hero() {
         </h1>
 
         <p className="mt-5 max-w-md text-[1.05rem] leading-relaxed text-muted">
-          One goal in. A master plans the graph. Workers build each piece in
-          their own sandbox, on their own branch.
+          One goal in. A live captain explores your repository, delegates focused work,
+          and adapts as agents report back from isolated branches.
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -122,7 +121,7 @@ function HeroCollage() {
       <div className="landing-card landing-float-a absolute left-0 top-6 z-10 w-[58%] rotate-[-2deg] bg-[#fef08a] p-4 sm:left-2 sm:top-8">
         <p className="text-xs font-semibold uppercase tracking-wide text-bright/70">Task list</p>
         <ul className="mt-3 space-y-2 text-sm font-medium">
-          {["Plan the API contract", "Ship the frontend", "Add database migration", "Open the PR"].map((item, i) => (
+          {["Explore the repository", "Delegate focused work", "Review returned changes", "Summarize the run"].map((item, i) => (
             <li key={item} className="flex items-center gap-2">
               <span className={`grid size-4 place-items-center rounded-full border border-line ${i < 2 ? "bg-ok" : "bg-white"}`}>
                 {i < 2 && <Check className="size-2.5" strokeWidth={3} />}
@@ -169,22 +168,22 @@ function HeroCollage() {
 const STEPS = [
   {
     n: "01",
-    title: "Plan the graph",
-    body: "The master clones your repo read-only and turns the goal into tasks with real dependencies.",
+    title: "Captain explores",
+    body: "A read-only captain inspects the repository and delegates only after it understands the goal and codebase.",
     tone: "bg-white",
     icon: Workflow,
   },
   {
     n: "02",
     title: "Run in parallel",
-    body: "Every ready task gets its own sandbox and branch. Workers talk as interfaces land.",
+    body: "Each focused task gets its own sandbox and branch. Concurrency and total spend stay within run budgets.",
     tone: "bg-[#fef08a]",
     icon: Layers,
   },
   {
     n: "03",
-    title: "Ship as a PR",
-    body: "Commits land on worker branches, merge into an integration branch, and open a pull request.",
+    title: "Adapt and review",
+    body: "The captain reads results, answers blockers, requests independent review, and decides what to do next. Humans merge.",
     tone: "bg-[#bae6fd]",
     icon: GitBranch,
   },
@@ -198,7 +197,7 @@ export function HowItWorks() {
           Not just another coding bot
         </h2>
         <p className="mt-3 text-muted">
-          kapi is a small team: a planner, parallel workers, and a review loop — all on free tiers.
+          kapi is a small team: a live captain, parallel workers, and independent reviewers.
         </p>
       </div>
 
@@ -235,12 +234,12 @@ const FEATURES = [
   {
     icon: ShieldCheck,
     title: "Scoped credentials",
-    body: "Sandboxes receive a one-hour token for one repository. Your own login never enters the sandbox.",
+    body: "Sandboxes receive a short-lived token for one repository and only the vault secrets explicitly requested for that job.",
   },
   {
     icon: Workflow,
-    title: "A dependency graph",
-    body: "Tasks declare what they need. The scheduler starts every ready wave at once, not a queue.",
+    title: "Adaptive delegation",
+    body: "There is no frozen task graph. The captain can spawn, wait, answer, cancel, and delegate again from new evidence.",
   },
 ] as const;
 
@@ -253,11 +252,11 @@ export function Capabilities() {
             Designed for the way an engineering team actually works
           </h2>
           <p className="mt-4 text-[15px] leading-relaxed text-muted">
-            Sign in with GitHub, pick a repo you own, install the kapi app once,
-            and watch the plan come back while workers build in parallel.
+            Sign in, connect your Codex subscription, install the kapi GitHub App on a repository,
+            and watch the fleet change shape while it works.
           </p>
           <ul className="mt-6 space-y-3">
-            {["Infinite parallel waves", "Git-native branches and PRs", "Works on free Gemini + Neon + Daytona"].map((item) => (
+            {["Budgeted parallel agents", "Git-native branches and pull requests", "Codex subscription model access"].map((item) => (
               <li key={item} className="flex items-center gap-3 text-sm font-medium">
                 <span className="grid size-6 place-items-center rounded-full border border-line bg-[#bae6fd]">
                   <Check className="size-3.5" strokeWidth={3} />
@@ -273,17 +272,17 @@ export function Capabilities() {
             Popular with solo builders
           </span>
           <h3 className="font-display mt-4 text-2xl font-bold tracking-tight">
-            From messy goal to polished PR
+            From goal to reviewed branches
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-muted">
-            Brainstorm Monday, let workers ship branches Tuesday, walk into review with a clean pull request.
+            Give the captain a goal, inspect every branch and verdict, then choose what a human should merge.
           </p>
           <div className="mt-5 grid grid-cols-2 gap-3">
             {[
-              { title: "Plan", tone: "bg-[#fef08a]" },
+              { title: "Captain", tone: "bg-[#fef08a]" },
               { title: "Frontend", tone: "bg-[#bae6fd]" },
               { title: "Backend", tone: "bg-white" },
-              { title: "Integration PR", tone: "bg-[#dcfce7]" },
+              { title: "Review", tone: "bg-[#dcfce7]" },
             ].map((card) => (
               <div key={card.title} className={`rounded-2xl border border-line ${card.tone} p-3`}>
                 <p className="text-sm font-semibold">{card.title}</p>
@@ -334,7 +333,7 @@ export function CallToAction() {
             Ready to give the team a goal?
           </h2>
           <p className="mx-auto mt-3 max-w-lg text-muted">
-            Sign in, connect GitHub, install the kapi app on a repo, and start a run.
+            Sign in, connect Codex, install the kapi GitHub App on a repository, and start a run.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <Link to="/app" className="landing-btn-primary">
@@ -349,14 +348,4 @@ export function CallToAction() {
       </div>
     </section>
   );
-}
-
-/** Kept for routes that still import older section names during transition. */
-export function StatStrip() { return null; }
-export function ArchitectureSection() { return null; }
-export function Pricing() { return null; }
-export function Faq() { return null; }
-
-export function Band({ children }: { children: ReactNode }) {
-  return <>{children}</>;
 }

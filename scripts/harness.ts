@@ -1,7 +1,14 @@
 /** A test harness small enough that it never needs its own tests. */
 let failures = 0;
 let passes = 0;
+let skips = 0;
 let suite = "";
+
+class SkipTest extends Error {}
+
+export function skip(reason: string): never {
+  throw new SkipTest(reason);
+}
 
 export function group(name: string) {
   suite = name;
@@ -14,6 +21,11 @@ export async function test(name: string, fn: () => void | Promise<void>) {
     passes++;
     console.log(`    \x1b[32mok\x1b[0m   ${name}`);
   } catch (err) {
+    if (err instanceof SkipTest) {
+      skips++;
+      console.log(`    \x1b[33mskip\x1b[0m ${name} (${err.message})`);
+      return;
+    }
     failures++;
     const detail = err instanceof Error ? err.message : String(err);
     console.log(`    \x1b[31mFAIL\x1b[0m ${name}`);
@@ -49,8 +61,8 @@ export async function throws(fn: () => unknown, message: string) {
 export function report(): never {
   console.log(
     failures === 0
-      ? `\n  \x1b[32m${passes} passed\x1b[0m\n`
-      : `\n  \x1b[31m${failures} failed\x1b[0m, ${passes} passed\n`,
+      ? `\n  \x1b[32m${passes} passed\x1b[0m${skips ? `, \x1b[33m${skips} skipped\x1b[0m` : ""}\n`
+      : `\n  \x1b[31m${failures} failed\x1b[0m, ${passes} passed${skips ? `, ${skips} skipped` : ""}\n`,
   );
   process.exit(failures === 0 ? 0 : 1);
 }

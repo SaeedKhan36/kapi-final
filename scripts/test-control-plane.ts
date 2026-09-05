@@ -90,6 +90,28 @@ await test("Codex connection rejects an off-site return URL", async () => {
   equal(result.status, 400, "open redirects are refused");
 });
 
+await test("production observability and webhook routes fail closed without shared secrets", async () => {
+  const priorNodeEnv = process.env.NODE_ENV;
+  const priorMetrics = process.env.KAPI_METRICS_TOKEN;
+  const priorWebhook = process.env.GITHUB_WEBHOOK_SECRET;
+  try {
+    process.env.NODE_ENV = "production";
+    delete process.env.KAPI_METRICS_TOKEN;
+    delete process.env.GITHUB_WEBHOOK_SECRET;
+    equal((await fetch(`${base}/metrics`)).status, 503, "metrics never become public by omission");
+    equal((await fetch(`${base}/webhooks/github`, {
+      method: "POST", headers: { "x-github-event": "ping" }, body: "{}",
+    })).status, 503, "webhooks never become unsigned by omission");
+  } finally {
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
+    if (priorMetrics === undefined) delete process.env.KAPI_METRICS_TOKEN;
+    else process.env.KAPI_METRICS_TOKEN = priorMetrics;
+    if (priorWebhook === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
+    else process.env.GITHUB_WEBHOOK_SECRET = priorWebhook;
+  }
+});
+
 /* ------------------------------------------------------------------ */
 
 group("projects and threads");
@@ -209,7 +231,7 @@ await test("posting a message opens a run and queues a root captain job", async 
 });
 
 await test("the queued captain is claimable by a VM", async () => {
-  // Phase 2 supplies the VM. What matters here is that the control plane left
+  // The provisioner supplies the VM. What matters here is that the control plane left
   // work in a state something can come and take.
   const claimed = await claim(handle, { vmId: "test-vm", runId, kinds: ["captain"] });
   assert(claimed?.id === captainJobId, "the captain job was claimable");

@@ -2,6 +2,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AgentTree } from "./components/AgentTree.tsx";
 import { BudgetMeter } from "./components/RunPanel.tsx";
 import { Badge, RoleChip } from "./components/ui.tsx";
+import { Readiness } from "./pages/Setup.tsx";
+import { Landing } from "./pages/Landing.tsx";
+import { match } from "./router.tsx";
 import type { AgentNode, TreeNode } from "./lib/agents.ts";
 import { assert, group, report, test } from "../../../scripts/harness.ts";
 
@@ -42,6 +45,27 @@ await test("the fleet remains a nested spawn tree and surfaces delivery state", 
   assert(html.includes("implement the endpoint"), "child instruction is rendered");
   assert(html.includes("PR ready"), "pull request state is rendered");
   assert(html.includes("ci: success"), "CI state is rendered");
+});
+
+await test("the landing page describes the adaptive captain rather than a frozen planner", () => {
+  const html = renderToStaticMarkup(<Landing />);
+  assert(html.includes("live captain"), "the adaptive orchestrator is named");
+  assert(html.includes("There is no frozen task graph"), "the implementation model is accurate");
+  assert(!html.includes("Gemini") && !html.includes("Infinite parallel"), "retired product claims are gone");
+  assert(html.includes('href="/app"'), "the primary call to action reaches the dashboard");
+});
+
+await test("setup readiness remains understandable without color", () => {
+  const html = renderToStaticMarkup(
+    <Readiness label="Vault" value="not configured" detail="Set the encryption key." ok={false} />,
+  );
+  assert(html.includes("needs attention"), "the warning has an accessible label");
+  assert(html.includes("Set the encryption key"), "the corrective detail is visible");
+});
+
+await test("route matching decodes ids and rejects malformed escapes", () => {
+  assert(match("/projects/a%20b", "/projects/:id")?.id === "a b", "encoded ids decode");
+  assert(match("/projects/%ZZ", "/projects/:id") === null, "bad URL encoding cannot crash the app");
 });
 
 report();

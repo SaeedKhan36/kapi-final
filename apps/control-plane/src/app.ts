@@ -151,6 +151,9 @@ export function createApp(deps: {
 
   app.get("/metrics", async (c) => {
     const required = process.env.KAPI_METRICS_TOKEN;
+    if (process.env.NODE_ENV === "production" && !required) {
+      return c.text("metrics authentication is not configured\n", 503);
+    }
     if (required && c.req.header("authorization") !== `Bearer ${required}`) return c.text("unauthorized\n", 401);
     const rows = await handle.raw<{
       queued: number; leased: number; dead: number; active_vms: number; scheduler_lag: number;

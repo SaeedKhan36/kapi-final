@@ -9,7 +9,7 @@ import {
   markRunning, reap, startReaper,
 } from "@kapi/queue";
 import type { Job, JobStatus } from "@kapi/protocol";
-import { assert, equal, group, report, sleep, test } from "./harness.ts";
+import { assert, equal, group, report, skip, sleep, test } from "./harness.ts";
 import { seedRun, seedSiblingRun, type Seeded } from "./seed.ts";
 
 const REAL_PG = Boolean(process.env.DATABASE_URL);
@@ -20,6 +20,9 @@ const isolated = REAL_PG
   : null;
 const handle = await createDb(isolated?.url);
 console.log(`\n  database: ${handle.target}`);
+if (handle.embedded) {
+  console.log("  note: real-Postgres contention cases are skipped; CI runs them against PostgreSQL 16");
+}
 
 group("0. startup ownership");
 
@@ -101,14 +104,7 @@ group("1. concurrent claim");
 
 await test("N VMs claiming at once produce zero double-claims", async () => {
   if (handle.embedded) {
-    throw new Error(
-      "This test requires real Postgres and refuses to run on PGlite.\n" +
-      "PGlite is single-process, so transactions serialise and FOR UPDATE SKIP\n" +
-      "LOCKED is never contended - a green run here would prove nothing.\n\n" +
-      "  docker run -d --name kapi-pg -p 5432:5432 -e POSTGRES_PASSWORD=kapi postgres:16\n" +
-      "  export DATABASE_URL=postgres://postgres:kapi@localhost:5432/postgres\n" +
-      "  pnpm test:unit",
-    );
+    skip("requires real PostgreSQL contention");
   }
 
   const s = await seedRun(handle);
@@ -128,7 +124,7 @@ await test("N VMs claiming at once produce zero double-claims", async () => {
 });
 
 await test("claims spread across runs contend on jobs, not on one run row", async () => {
-  if (handle.embedded) throw new Error("requires real Postgres (see above)");
+  if (handle.embedded) skip("requires real PostgreSQL contention");
 
   // Event sequencing takes a per-run lock, so a single run serialises its
   // claims. Four runs prove SKIP LOCKED is doing the work, not that lock.
@@ -148,7 +144,7 @@ await test("claims spread across runs contend on jobs, not on one run row", asyn
 });
 
 await test("100 simultaneous claimers across ten runs remain unique", async () => {
-  if (handle.embedded) throw new Error("requires real Postgres (see above)");
+  if (handle.embedded) skip("requires real PostgreSQL contention");
 
   const first = await seedRun(handle);
   const runIds = [first.runId, ...(await Promise.all(
@@ -168,7 +164,7 @@ await test("100 simultaneous claimers across ten runs remain unique", async () =
 });
 
 await test("more claimers than jobs: the surplus get null, not a duplicate", async () => {
-  if (handle.embedded) throw new Error("requires real Postgres (see above)");
+  if (handle.embedded) skip("requires real PostgreSQL contention");
 
   const s = await seedRun(handle);
   await Promise.all(Array.from({ length: 5 }, () => build(s.runId)));

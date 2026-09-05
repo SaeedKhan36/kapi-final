@@ -396,10 +396,7 @@ export const reviewRole: RoleHandler = async (rc) => {
   };
 };
 
-/**
- * Phase 2 placeholder, still used by roles without their own loop yet.
- * Exercises the bootstrap path without a model in the picture.
- */
+/** Deterministic test-only role that exercises bootstrap without a model. */
 export const echoRole: RoleHandler = async ({ job, client, workdir, alive }) => {
   client.log(`agent online for ${job.kind}/${job.role}`, { workdir });
   client.emit("tool.call", { tool: "echo", args: { instruction: job.payload.instruction } });

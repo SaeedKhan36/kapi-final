@@ -53,7 +53,9 @@ export function SecretManager(
     <section>
       <h2 className="mb-3 text-sm font-medium text-muted">{title}</h2>
       <Card className="p-5">
-        <p className="mb-4 text-xs text-muted">Values are encrypted and never displayed again.</p>
+        <p className="mb-4 text-xs text-muted">
+          Values are encrypted and never displayed again. Agent jobs receive only names explicitly requested by their captain.
+        </p>
         <div className="grid gap-5 lg:grid-cols-[1fr_1.15fr]">
           <form className="space-y-3" onSubmit={save}>
             <Field label="Environment name" hint="UPPER_SNAKE_CASE">

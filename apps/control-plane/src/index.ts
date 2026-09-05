@@ -19,11 +19,14 @@ const handle = process.env.NODE_ENV === "production" ? await connectDb() : await
 const store = new Store(handle);
 const hub = new EventHub(store, handle);
 const auth = new Authenticator(handle);
-const provisioner = new Provisioner(handle);
+const operationsExternal = process.env.KAPI_OPERATIONS === "off";
+const provisioner = operationsExternal ? null : new Provisioner(handle);
 const requests = new RequestTracker();
-const app = createApp({ handle, store, hub, auth, requests, vmProvider: provisioner.providerName });
-const operations = process.env.KAPI_OPERATIONS === "off"
-  ? null : startOperations({ handle, store, hub, provisioner });
+const app = createApp({
+  handle, store, hub, auth, requests,
+  vmProvider: provisioner?.providerName ?? "external-worker",
+});
+const operations = provisioner ? startOperations({ handle, store, hub, provisioner }) : null;
 
 const port = Number(process.env.PORT ?? process.env.CONTROL_PLANE_PORT ?? 8787);
 const server = serve({ fetch: app.fetch, port }, () => {
@@ -33,7 +36,7 @@ const server = serve({ fetch: app.fetch, port }, () => {
   console.log(`  db    ${handle.target}`);
   console.log(`  auth  ${auth.mode}${auth.mode === "dev" ? "  (NOT authenticated - set WORKOS_* for real auth)" : ""}`);
   console.log(`  vault ${vaultConfigured() ? "configured" : "NOT configured - set KAPI_SECRET_KEY"}`);
-  console.log(`  vms   ${provisioner.providerName}${process.env.KAPI_PROVISIONER === "off" ? "  (provisioner off)" : ""}\n`);
+  console.log(`  vms   ${provisioner?.providerName ?? "external worker"}${process.env.KAPI_PROVISIONER === "off" ? "  (provisioner off)" : ""}\n`);
 });
 
 const wss = attachWebSocket(server, hub, { auth, store });

@@ -17,10 +17,10 @@ import type { Store } from "./store.ts";
  * in here would make that choice invisible, and one of the two callers cannot
  * safely publish at all (see `onReap`).
  *
- * Both transitions are written as a single guarded `UPDATE ... WHERE` rather
- * than a read-then-write. That is what makes them safe to call from the HTTP
- * path and the reaper at the same time with no coordination between them: the
- * row lock serialises the two, and the loser's statement simply matches nothing.
+ * Terminal transitions use guarded updates rather than read-then-write. The
+ * row lock serialises competing completion/cancellation paths, and a cancelled
+ * run holds that same lock while closing all work so a concurrent spawn wakes
+ * up, observes the terminal state, and creates nothing.
  */
 export type RunLifecycle = ReturnType<typeof createRunLifecycle>;
 

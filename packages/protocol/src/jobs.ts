@@ -29,7 +29,7 @@ export const isJobTerminal = (s: JobStatus): boolean => TERMINAL_JOB_STATUSES.in
 export const LEASED_JOB_STATUSES: readonly JobStatus[] = ["claimed", "running"];
 export const isJobLeased = (s: JobStatus): boolean => LEASED_JOB_STATUSES.includes(s);
 
-/** Sizing hints for the VM a job runs on. Consumed in Phase 2; stored now. */
+/** Sizing hints consumed by the provisioner when it creates this job's VM. */
 export const VmSpecSchema = z.object({
   image: z.string().optional(),
   cpus: z.number().int().positive().optional(),
