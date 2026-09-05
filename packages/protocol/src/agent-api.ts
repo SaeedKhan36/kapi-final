@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { EventKindSchema } from "./events.ts";
-import { JobKindSchema, JobResultSchema, JobStatusSchema } from "./jobs.ts";
+import { JobKindSchema, JobResultSchema, JobSecretNameSchema, JobStatusSchema } from "./jobs.ts";
 import { AgentRoleSchema } from "./ids.ts";
 import { ReviewVerdictSchema } from "./review.ts";
 
@@ -105,6 +105,8 @@ export const SpawnRequestSchema = z.object({
   /** Job ids that must SUCCEED first. Usually empty. */
   dependsOn: z.array(z.string()).default([]),
   priority: z.number().int().default(0),
+  /** Vault values this worker needs, named explicitly and resolved only at provisioning. */
+  secrets: z.array(JobSecretNameSchema).max(32).optional(),
   context: z.record(z.unknown()).default({}),
 });
 export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;

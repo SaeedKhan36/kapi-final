@@ -127,6 +127,13 @@ export const spawnAgentsTool: AgentTool = {
               type: "number",
               description: "Higher priority runs sooner. Use this for a time-sensitive fixer.",
             },
+            secrets: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Exact encrypted-vault environment variable names this worker needs. " +
+                "Request only credentials required for its task; values are never shown here.",
+            },
             context: {
               type: "object",
               additionalProperties: true,
@@ -161,6 +168,7 @@ export const spawnAgentsTool: AgentTool = {
         dependsOn: (spec.depends_on as string[] | undefined)
           ?? (spec.dependsOn as string[] | undefined) ?? [],
         priority: Number(spec.priority ?? 0),
+        secrets: (spec.secrets as string[] | undefined),
         context: {
           ...((spec.context as Record<string, unknown> | undefined) ?? {}),
           ...(spec.base_branch ? { baseBranch: String(spec.base_branch) } : {}),

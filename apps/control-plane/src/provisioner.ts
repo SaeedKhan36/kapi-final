@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { DbHandle } from "@kapi/db";
-import { mintJobToken } from "@kapi/identity";
+import { mintJobToken, resolveAll } from "@kapi/identity";
 import { AGENT_ENV, newId, type Job } from "@kapi/protocol";
 import { toJob, type JobRow } from "@kapi/queue";
 import { JOB_COLUMNS } from "@kapi/queue";
@@ -216,6 +216,7 @@ export class Provisioner {
     const bundle = await this.#agentBundle();
     const vmId = newId("vm");
     const runtimeEnv = agentRuntimeEnv();
+    const secrets = await this.#jobSecrets(job);
 
     // Claim the slot BEFORE creating anything: two provisioner ticks (or two
     // plane instances) must not both build a VM for the same job.
@@ -250,6 +251,7 @@ export class Provisioner {
           planeId: process.env.KAPI_PLANE_ID ?? "default",
         },
         env: {
+          ...secrets,
           ...runtimeEnv,
           [AGENT_ENV.url]: url,
           [AGENT_ENV.jobId]: job.id,
@@ -306,6 +308,26 @@ export class Provisioner {
 
     this.#log(`${job.kind}/${job.role} ${job.id} -> ${this.#provider.name} vm ${vm.id}`);
     return vm.id;
+  }
+
+  async #jobSecrets(job: Job): Promise<Record<string, string>> {
+    const names = [...new Set(job.payload.secrets ?? [])];
+    if (names.length === 0) return {};
+    const owners = await this.handle.raw<{ project_id: string; owner_id: string }>(
+      `SELECT r.project_id,p.owner_id FROM runs r
+       JOIN projects p ON p.id=r.project_id WHERE r.id=$1`,
+      [job.runId],
+    );
+    const owner = owners[0];
+    if (!owner) throw new Error(`cannot resolve secrets for unknown run ${job.runId}`);
+    const resolved = await resolveAll(this.handle, names, {
+      taskId: job.id, projectId: owner.project_id, userId: owner.owner_id,
+    });
+    const missing = names.filter((name) => resolved[name] === undefined);
+    if (missing.length > 0) {
+      throw new Error(`requested vault secret(s) not found: ${missing.join(", ")}`);
+    }
+    return resolved;
   }
 
   async #release(jobId: string, status: string) {

@@ -38,6 +38,15 @@ export const VmSpecSchema = z.object({
 });
 export type VmSpec = z.infer<typeof VmSpecSchema>;
 
+/** Environment variable names a job may request from the encrypted vault. */
+export const JobSecretNameSchema = z.string()
+  .regex(/^[A-Z][A-Z0-9_]{1,63}$/, "must be an UPPER_SNAKE env var name")
+  .refine((name) => !name.startsWith("KAPI_"), "KAPI_ names are reserved by the agent runtime")
+  .refine(
+    (name) => !["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM"].includes(name),
+    "operating-system environment names are reserved",
+  );
+
 /** Everything the agent needs to do the work, and nothing about scheduling. */
 export const JobPayloadSchema = z.object({
   instruction: z.string().min(1),
@@ -45,6 +54,8 @@ export const JobPayloadSchema = z.object({
   /** Files the spawner expects to be touched. Advisory. */
   touches: z.array(z.string()).default([]),
   vmSpec: VmSpecSchema.optional(),
+  /** Names only. Plaintext is resolved by the provisioner and never persisted here. */
+  secrets: z.array(JobSecretNameSchema).max(32).optional(),
   /** Free-form context the spawner wants carried through, e.g. a PR number. */
   context: z.record(z.unknown()).default({}),
 });
@@ -85,6 +96,7 @@ export const JobSpecSchema = z.object({
   priority: z.number().int().default(0),
   maxAttempts: z.number().int().positive().default(3),
   vmSpec: VmSpecSchema.optional(),
+  secrets: z.array(JobSecretNameSchema).max(32).optional(),
   context: z.record(z.unknown()).default({}),
 });
 export type JobSpec = z.infer<typeof JobSpecSchema>;

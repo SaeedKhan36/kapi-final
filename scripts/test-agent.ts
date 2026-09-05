@@ -3,9 +3,9 @@ loadEnv();
 
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import { Authenticator, JobTokenError, mintJobToken, verifyJobToken } from "@kapi/identity";
+import { Authenticator, JobTokenError, mintJobToken, putSecret, verifyJobToken } from "@kapi/identity";
 import { claim, enqueue, getJob, heartbeat, reap } from "@kapi/queue";
-import { LocalProvider } from "@kapi/vm";
+import { LocalProvider, type Vm, type VmProvider, type VmSpec } from "@kapi/vm";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Provisioner } from "../apps/control-plane/src/provisioner.ts";
@@ -238,6 +238,42 @@ await test("the local provider does not expose control-plane secrets", async () 
 /* ------------------------------------------------------------------ */
 
 group("provisioning a real VM");
+
+await test("only requested vault secrets reach a worker, with narrowest scope winning", async () => {
+  const s = await seedRun(handle);
+  const job = await echoJob(s.runId, {
+    instruction: "use an explicitly allowed credential",
+    secrets: ["DEPLOY_TOKEN", "USER_ONLY_TOKEN"],
+  });
+  await putSecret(handle, { scope: "user", scopeId: s.userId, name: "DEPLOY_TOKEN" }, "user-value");
+  await putSecret(handle, { scope: "user", scopeId: s.userId, name: "USER_ONLY_TOKEN" }, "user-only");
+  await putSecret(handle, { scope: "project", scopeId: s.projectId, name: "DEPLOY_TOKEN" }, "project-value");
+  await putSecret(handle, { scope: "task", scopeId: job.id, name: "DEPLOY_TOKEN" }, "task-value");
+  await putSecret(handle, { scope: "user", scopeId: s.userId, name: "UNREQUESTED_TOKEN" }, "never-inject");
+
+  class CapturingProvider implements VmProvider {
+    readonly name = "capture";
+    spec: VmSpec | null = null;
+    async isAvailable() { return true; }
+    async create(spec: VmSpec): Promise<Vm> {
+      this.spec = spec;
+      return { id: "vm-capture", provider: this.name, workdir: "/workspace", createdAt: Date.now() };
+    }
+    async exec() { return { exitCode: 0, stdout: "", stderr: "", durationMs: 0 }; }
+    async *execStream() { /* no output */ }
+    async writeFile() {} async readFile() { return ""; }
+    async spawnDetached() {} async destroy() {}
+  }
+  const capture = new CapturingProvider();
+  await new Provisioner(handle, {
+    provider: capture, publicUrl: base, runId: s.runId, onLog: () => {},
+  }).provision(job);
+
+  equal(capture.spec?.env?.DEPLOY_TOKEN, "task-value", "task scope overrides project and user");
+  equal(capture.spec?.env?.USER_ONLY_TOKEN, "user-only", "requested user fallback is injected");
+  equal(capture.spec?.env?.UNREQUESTED_TOKEN, undefined, "unrequested vault data stays in the vault");
+  assert(!JSON.stringify(job.payload).includes("task-value"), "plaintext is never persisted in the job");
+});
 
 await test("the provisioner starts an agent that runs the job to completion", async () => {
   const s = await seedRun(handle);

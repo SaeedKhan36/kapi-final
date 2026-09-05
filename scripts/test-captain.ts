@@ -175,7 +175,7 @@ await test("spawn_agents creates real child jobs under the captain", async () =>
   const cap = await captainOnRun();
   const res = await spawnAgentsTool.run({
     agents: [
-      { role: "backend", instruction: "add the endpoint", touches: ["src/api.ts"] },
+      { role: "backend", instruction: "add the endpoint", touches: ["src/api.ts"], secrets: ["API_TOKEN"] },
       { role: "frontend", instruction: "add the page", touches: ["src/page.tsx"] },
     ],
   }, cap.ctx);
@@ -188,6 +188,10 @@ await test("spawn_agents creates real child jobs under the captain", async () =>
   assert(
     children.some((c) => c.payload.touches.includes("src/api.ts")),
     "file ownership carried through, which is how the captain keeps workers apart",
+  );
+  assert(
+    children.some((c) => c.payload.secrets?.includes("API_TOKEN")),
+    "requested vault names are carried without any plaintext value",
   );
 
   const events = await store.listEvents(cap.seeded.runId, 0);

@@ -60,6 +60,18 @@ await test("JobSpec rejects an unknown role or kind", () => {
   }).success, "unknown kind rejected");
 });
 
+await test("job secret requests accept credentials but reject runtime overrides", () => {
+  assert(JobSpecSchema.safeParse({
+    runId: "r", kind: "build", role: "backend", instruction: "x",
+    secrets: ["DATABASE_URL", "GITHUB_TOKEN"],
+  }).success, "ordinary credential names are accepted");
+  for (const name of ["lowercase", "KAPI_AGENT_TOKEN", "PATH"]) {
+    assert(!JobSpecSchema.safeParse({
+      runId: "r", kind: "build", role: "backend", instruction: "x", secrets: [name],
+    }).success, `${name} cannot override the agent runtime`);
+  }
+});
+
 await test("status predicates agree with the enum", () => {
   for (const s of JobStatusSchema.options) {
     const terminal = isJobTerminal(s);

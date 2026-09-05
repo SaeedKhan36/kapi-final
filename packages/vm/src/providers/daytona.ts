@@ -3,6 +3,8 @@ import type {
 } from "../types.ts";
 import { VmError } from "../types.ts";
 
+const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+
 /**
  * Daytona Cloud - real isolation, ~90ms starts.
  *
@@ -146,7 +148,10 @@ export class DaytonaProvider implements VmProvider {
     const { box } = this.#handle(id);
     const cwd = this.#resolveCwd(box, opts.cwd);
     const env = Object.entries(opts.env ?? {})
-      .map(([k, v]) => `export ${k}=${JSON.stringify(v)};`)
+      // JSON strings are not shell quoting: $, backticks and command
+      // substitutions still execute inside double quotes. Environment values
+      // can be secrets, so quote them as inert POSIX single-quoted text.
+      .map(([k, v]) => `export ${k}=${shellQuote(v)};`)
       .join(" ");
     const res = await this.exec(
       id,

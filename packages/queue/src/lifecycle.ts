@@ -51,6 +51,7 @@ export async function enqueueIn(tx: SqlRunner, spec: JobSpec): Promise<Job> {
           acceptance: s.acceptance,
           touches: s.touches,
           ...(s.vmSpec ? { vmSpec: s.vmSpec } : {}),
+          ...(s.secrets?.length ? { secrets: [...new Set(s.secrets)] } : {}),
           context: s.context,
         }),
         s.maxAttempts ?? defaultMaxAttempts(),

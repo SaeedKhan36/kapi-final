@@ -307,6 +307,7 @@ export function createAgentApi(deps: {
         dependsOn: want.dependsOn,
         priority: want.priority,
         maxAttempts: 3,
+        secrets: want.secrets,
         // The spawner's own context wins on conflict - it is free to hand a
         // child a different repo on purpose, this just stops "nothing at all"
         // from being the default.
