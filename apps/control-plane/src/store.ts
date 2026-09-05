@@ -220,16 +220,6 @@ export class Store {
     return rows[0]?.owner_id ?? null;
   }
 
-  async setRunStatus(runId: string, status: string, error?: string): Promise<void> {
-    await this.h.raw(
-      `UPDATE runs SET status = $2, error = COALESCE($3, error),
-              finished_at = CASE WHEN $2 IN ('completed','failed','cancelled')
-                                 THEN now() ELSE finished_at END
-       WHERE id = $1`,
-      [runId, status, error ?? null],
-    );
-  }
-
   async getRunDetail(runId: string): Promise<{
     run: Run; jobs: Job[]; agents: Record<string, unknown>[];
     events: EventRow[]; artifacts: Record<string, unknown>[];

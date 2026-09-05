@@ -1,4 +1,4 @@
-import type { DbHandle } from "@kapi/db";
+import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
 import { isJobTerminal, type Job } from "@kapi/protocol";
 import { appendEvent, jobStatusEvent } from "@kapi/queue";
 import type { Store } from "./store.ts";
@@ -140,6 +140,55 @@ export function createRunLifecycle(deps: { handle: DbHandle; store: Store }) {
       });
     });
 
+  /** Cancels a run and all of its work as one durable state transition. */
+  const cancelRun = async (runId: string, reason = "cancelled by user"): Promise<number> =>
+    retryDeadlockedTransaction(handle, async (tx) => {
+      // Lock and close the run first. A concurrent spawn request uses this same
+      // row as its mutex and, once it wakes, will see `cancelled` and refuse to
+      // create work. Queue transitions take the opposite lock order, so this
+      // transaction is explicitly deadlock-retried by the shared DB helper.
+      const claimed = await tx<{ schedule_id: string | null }>(
+        `UPDATE runs SET status='cancelled', error=COALESCE(error,$2), finished_at=now()
+         WHERE id=$1 AND status NOT IN ('completed','failed','cancelled')
+         RETURNING schedule_id`,
+        [runId, reason],
+      );
+      if (claimed.length === 0) return 0;
+
+      const rows = await tx<{ id: string }>(
+        `UPDATE jobs SET status='cancelled', lease_expires_at=NULL,
+                         finished_at=now(), error=$2
+         WHERE run_id=$1 AND status NOT IN ('succeeded','failed','cancelled')
+         RETURNING id`,
+        [runId, reason],
+      );
+      const jobIds = rows.map((row) => row.id).sort();
+      if (jobIds.length > 0) {
+        await tx(
+          `UPDATE agents SET status='cancelled', stopped_at=now()
+           WHERE job_id=ANY($1::text[]) AND stopped_at IS NULL`,
+          [jobIds],
+        );
+        for (const jobId of jobIds) {
+          await appendEvent(tx, jobStatusEvent({
+            runId, jobId, to: "cancelled", detail: reason,
+          }));
+        }
+      }
+      if (claimed[0]?.schedule_id) {
+        await tx(
+          `UPDATE schedules SET last_status='cancelled', last_error=$2, updated_at=now()
+           WHERE id=$1`,
+          [claimed[0].schedule_id, reason],
+        );
+      }
+      await appendEvent(tx, {
+        runId, kind: "run.status", from: "orchestrator",
+        payload: { status: "cancelled", summary: reason },
+      });
+      return jobIds.length;
+    });
+
   /**
    * The reaper's adapter: finish any run whose ROOT captain was just dead-lettered.
    *
@@ -168,5 +217,5 @@ export function createRunLifecycle(deps: { handle: DbHandle; store: Store }) {
     }
   };
 
-  return { startRun, finishRun, onReap };
+  return { startRun, finishRun, cancelRun, onReap };
 }

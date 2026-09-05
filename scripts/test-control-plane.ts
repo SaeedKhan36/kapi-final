@@ -237,6 +237,14 @@ await test("cancelling a run cancels the captain's whole subtree", async () => {
   equal(res.status, 200, "cancelled");
   assert(res.body.cancelled >= 1, "at least the captain");
   equal((await getJob(handle, captainJobId))?.status, "cancelled", "the claimed captain was cancelled");
+  const repeated = await api<{ cancelled: number }>("POST", `/api/runs/${runId}/cancel`);
+  equal(repeated.body.cancelled, 0, "repeating cancellation is a no-op");
+  const events = await store.listEvents(runId, 0);
+  equal(
+    events.filter((event) => event.kind === "run.status" && event.payload.status === "cancelled").length,
+    1,
+    "one terminal run event is emitted",
+  );
 });
 
 /* ------------------------------------------------------------------ */

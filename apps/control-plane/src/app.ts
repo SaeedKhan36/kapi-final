@@ -8,13 +8,14 @@ import {
   Authenticator, GitHubApp, WorkOSError, deleteSecret, listSecrets, parseRepoUrl, putSecret,
   readAppConfig, vaultConfigured, type Principal, type SecretScope,
 } from "@kapi/identity";
-import { appendEvent, cancelSubtree, getJob, listJobs } from "@kapi/queue";
+import { getJob, listJobs } from "@kapi/queue";
 import type { Store } from "./store.ts";
 import type { EventHub } from "./events.ts";
 import { createAgentApi } from "./agent-api.ts";
 import { createConnectionRoutes } from "./connections.ts";
 import { createGithubWebhookRoutes } from "./github-webhook.ts";
 import { RunService } from "./run-service.ts";
+import { createRunLifecycle } from "./run-lifecycle.ts";
 import { Scheduler } from "./scheduler.ts";
 import { createWebAuthRoutes } from "./web-auth.ts";
 import { allowedOrigins } from "./config.ts";
@@ -67,6 +68,7 @@ export function createApp(deps: {
   const { handle, store, hub, auth } = deps;
   const runService = deps.runService ?? new RunService(handle, store, hub);
   const scheduler = deps.scheduler ?? new Scheduler(handle, store, runService);
+  const runLifecycle = createRunLifecycle({ handle, store });
   const app = new Hono<Env>();
   const origins = allowedOrigins();
   const githubConfig = readAppConfig();
@@ -373,25 +375,9 @@ export function createApp(deps: {
     const id = c.req.param("id");
     if (!(await ownsRun(c, id))) return c.json({ error: "run not found" }, 404);
 
-    // Cancelling the root captain cascades through every agent it spawned.
-    const jobs = await listJobs(handle, id);
-    const roots = jobs.filter((j) => j.parentJobId === null);
-    const cancelled = (await Promise.all(roots.map((r) => cancelSubtree(handle, r.id, "cancelled by user")))).flat();
-    await store.setRunStatus(id, "cancelled");
-    await handle.raw(
-      `UPDATE schedules s SET last_status='cancelled', updated_at=now()
-       FROM runs r WHERE r.id=$1 AND r.schedule_id=s.id`, [id],
-    );
-    // One run-level event, so a watching browser does not have to infer the
-    // run's fate from which of N job cancellations happened to be the root's.
-    await handle.transaction(async (tx) => {
-      await appendEvent(tx, {
-        runId: id, kind: "run.status", from: "orchestrator",
-        payload: { status: "cancelled", summary: "cancelled by user" },
-      });
-    });
+    const cancelled = await runLifecycle.cancelRun(id);
     for (const e of await store.listEvents(id, 0)) hub.publish(e);
-    return c.json({ cancelled: cancelled.length });
+    return c.json({ cancelled });
   });
 
   app.get("/api/jobs/:id", async (c) => {
