@@ -38,7 +38,7 @@ export class VmReconciler {
          WHERE provider=$1 AND vm_id IS NOT NULL AND stopped_at IS NULL`, [this.provider.name],
       );
       const byId = new Map(active.map((a) => [a.vm_id, a]));
-      const found = new Set(resources.map((r) => r.id));
+      const found = new Map(resources.map((r) => [r.id, r]));
       let orphaned = 0, destroyed = 0;
       for (const resource of resources) {
         if (!this.#isOwned(resource) || byId.has(resource.id) || +now - resource.createdAt < this.graceMs) continue;
@@ -52,11 +52,15 @@ export class VmReconciler {
       }
       let missing = 0;
       for (const agent of active) {
-        if (found.has(agent.vm_id)) continue;
+        const resource = found.get(agent.vm_id);
+        const unhealthy = resource?.status != null &&
+          /^(stopped|failed|error|destroyed|deleted|offline|exited|dead)$/i.test(resource.status);
+        if (resource && !unhealthy) continue;
         missing++;
         await this.handle.raw(
-          `UPDATE agents SET status='resource-missing', stopped_at=now()
-           WHERE job_id=$1 AND stopped_at IS NULL`, [agent.job_id],
+          `UPDATE agents SET status=$2, stopped_at=now()
+           WHERE job_id=$1 AND stopped_at IS NULL`,
+          [agent.job_id, unhealthy ? "resource-stopped" : "resource-missing"],
         );
       }
       return { discovered: resources.length, orphaned, destroyed, missing };

@@ -4,7 +4,7 @@ loadEnv();
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 import { Authenticator, mintJobToken } from "@kapi/identity";
-import { claim, enqueue, getJob, reap } from "@kapi/queue";
+import { claim, complete, enqueue, getJob, reap } from "@kapi/queue";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
@@ -423,9 +423,56 @@ await test("a requeued root does not finish its run", async () => {
   equal(run?.finishedAt, null, "and has no finish time");
 });
 
+await test("a finished root cancels every unfinished descendant", async () => {
+  const { runId: id, jobId } = await freshRun("close the whole fleet");
+  await claim(handle, { vmId: "vm-root-finish", jobId, runId: id });
+  const child = await enqueue(handle, {
+    runId: id, parentJobId: jobId, kind: "build", role: "backend",
+    instruction: "still working", acceptance: [], touches: [], dependsOn: [],
+    priority: 0, maxAttempts: 3, context: {},
+  });
+  const grandchild = await enqueue(handle, {
+    runId: id, parentJobId: child.id, kind: "review", role: "review",
+    instruction: "queued behind it", acceptance: [], touches: [], dependsOn: [],
+    priority: 0, maxAttempts: 3, context: {},
+  });
+  await handle.raw(
+    `INSERT INTO agents (job_id,run_id,role,status,vm_id,last_heartbeat)
+     VALUES ($1,$3,'backend','running','vm-child',now()),
+            ($2,$3,'review','provisioning','vm-grandchild',now())`,
+    [child.id, grandchild.id, id],
+  );
+
+  const root = await complete(handle, jobId, "vm-root-finish", {
+    ok: true, summary: "fleet result is final", filesChanged: [], commits: [],
+  });
+  await lifecycle.finishRun(root!);
+
+  equal((await getJob(handle, child.id))?.status, "cancelled", "running child stopped");
+  equal((await getJob(handle, grandchild.id))?.status, "cancelled", "queued grandchild stopped");
+  const live = await handle.raw<{ n: number }>(
+    `SELECT count(*)::int AS n FROM agents WHERE job_id=ANY($1::text[]) AND stopped_at IS NULL`,
+    [[child.id, grandchild.id]],
+  );
+  equal(Number(live[0]?.n), 0, "no descendant agent remains live");
+  const events = await store.listEvents(id, 0);
+  equal(
+    events.filter((event) => event.kind === "job.status" && event.payload.status === "cancelled").length,
+    2,
+    "each forced cancellation is visible in the event stream",
+  );
+});
+
 /* ------------------------------------------------------------------ */
 
 group("GitHub check webhooks");
+
+// Use a live fleet for privileged inbox calls. Earlier coverage deliberately
+// cancels the module-level run, and a cancelled captain's token must stay dead.
+const webhookFleet = await freshRun("receive CI results");
+await claim(handle, {
+  vmId: "vm-webhook-captain", jobId: webhookFleet.jobId, runId: webhookFleet.runId,
+});
 
 await test("a completed check lands once in the correlated run and captain inbox", async () => {
   const payload = {
@@ -440,7 +487,7 @@ await test("a completed check lands once in the correlated run and captain inbox
       conclusion: "success",
       head_sha: "abc123",
       details_url: "https://github.com/kapi/test/actions/runs/1",
-      check_suite: { id: 501, head_branch: `kapi/${captainJobId}`, head_sha: "abc123" },
+      check_suite: { id: 501, head_branch: `kapi/${webhookFleet.jobId}`, head_sha: "abc123" },
     },
   };
 
@@ -461,7 +508,7 @@ await test("a completed check lands once in the correlated run and captain inbox
 
   const detail = await api<{ events: Array<{
     kind: string; to: string | null; payload: Record<string, unknown>;
-  }> }>("GET", `/api/runs/${runId}`);
+  }> }>("GET", `/api/runs/${webhookFleet.runId}`);
   const ci = detail.body.events.filter((event) =>
     event.kind === "ci.completed" && event.payload.deliveryId === "delivery-check-1001"
   );
@@ -469,7 +516,9 @@ await test("a completed check lands once in the correlated run and captain inbox
   equal(ci[0]!.to, "captain", "the root captain is the event recipient");
   equal(ci[0]!.payload.conclusion, "success", "the conclusion is preserved");
 
-  const token = mintJobToken({ jobId: captainJobId, runId, vmId: "test-vm" });
+  const token = mintJobToken({
+    jobId: webhookFleet.jobId, runId: webhookFleet.runId, vmId: "vm-webhook-captain",
+  });
   const inbox = await fetch(`${base}/agent/inbox?after=0`, {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -493,12 +542,12 @@ await test("an inbox message carries the kind of event it came from", async () =
   // demand opposite responses - one blocks an agent until answered, the other
   // cannot be replied to at all. Without the kind they are indistinguishable.
   const child = await enqueue(handle, {
-    runId, parentJobId: captainJobId, kind: "build", role: "backend",
+    runId: webhookFleet.runId, parentJobId: webhookFleet.jobId, kind: "build", role: "backend",
     instruction: "ask something", acceptance: [], touches: [],
     dependsOn: [], priority: 0, maxAttempts: 3, context: {},
   });
-  await claim(handle, { vmId: "vm-asker", jobId: child.id, runId });
-  const childToken = mintJobToken({ jobId: child.id, runId, vmId: "vm-asker" });
+  await claim(handle, { vmId: "vm-asker", jobId: child.id, runId: webhookFleet.runId });
+  const childToken = mintJobToken({ jobId: child.id, runId: webhookFleet.runId, vmId: "vm-asker" });
   await fetch(`${base}/agent/events`, {
     method: "POST",
     headers: { authorization: `Bearer ${childToken}`, "content-type": "application/json" },
@@ -507,7 +556,9 @@ await test("an inbox message carries the kind of event it came from", async () =
     }),
   });
 
-  const token = mintJobToken({ jobId: captainJobId, runId, vmId: "test-vm" });
+  const token = mintJobToken({
+    jobId: webhookFleet.jobId, runId: webhookFleet.runId, vmId: "vm-webhook-captain",
+  });
   const res = await fetch(`${base}/agent/inbox?after=0`, {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -532,7 +583,7 @@ await test("a non-completed check is ignored", async () => {
     body: JSON.stringify({
       action: "requested",
       repository: { full_name: "kapi/test" },
-      check_suite: { id: 502, status: "queued", head_branch: `kapi/${captainJobId}` },
+      check_suite: { id: 502, status: "queued", head_branch: `kapi/${webhookFleet.jobId}` },
     }),
   });
   equal(res.status, 202, "an in-progress suite does not write completion state");

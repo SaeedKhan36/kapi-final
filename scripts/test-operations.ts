@@ -160,5 +160,29 @@ await test("only labelled resources with KAPI ownership metadata are deleted", a
   equal(provider.destroyed.join(","), "owned-orphan", "unowned resource protected");
 });
 
+await test("a provider-reported stopped VM releases its active agent row", async () => {
+  const provider = new FakeProvider();
+  const thread = await store.createThread(project.id, "stopped resource");
+  const started = await runs.start({ thread, project, goal: "detect stopped VM" });
+  await handle.raw(
+    `INSERT INTO agents (job_id,run_id,role,status,vm_id,provider,last_heartbeat)
+     VALUES ($1,$2,'captain','provisioning','vm-stopped','fake',now())`,
+    [started.job.id, started.run.id],
+  );
+  provider.resources = [{
+    id: "vm-stopped", provider: "fake", workdir: "/tmp", createdAt: Date.now(),
+    managed: true, status: "stopped",
+    metadata: { jobId: started.job.id, runId: started.run.id },
+  }];
+
+  const result = await new VmReconciler(handle, provider, 60_000, 0, true).reconcile();
+  equal(result.missing, 1, "the stopped resource is treated as unavailable");
+  const rows = await handle.raw<{ status: string; stopped_at: string | null }>(
+    `SELECT status,stopped_at FROM agents WHERE job_id=$1`, [started.job.id],
+  );
+  equal(rows[0]?.status, "resource-stopped", "the reason is retained");
+  assert(rows[0]?.stopped_at != null, "the reservation is released");
+});
+
 await handle.close();
 report();

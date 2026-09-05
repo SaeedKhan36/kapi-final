@@ -1,6 +1,6 @@
 import type { DbHandle } from "@kapi/db";
 import { isJobTerminal, type Job } from "@kapi/protocol";
-import { appendEvent } from "@kapi/queue";
+import { appendEvent, jobStatusEvent } from "@kapi/queue";
 import type { Store } from "./store.ts";
 
 /**
@@ -74,6 +74,43 @@ export function createRunLifecycle(deps: { handle: DbHandle; store: Store }) {
     handle.transaction(async (tx) => {
       const status = job.status === "succeeded" ? "completed" : "failed";
       const summary = job.result?.summary ?? job.error ?? `the captain ${job.status}`;
+
+      // A root captain is the owner of every branch beneath it. Once it exits,
+      // no descendant can produce a result that will still be consumed, so
+      // keeping queued or leased children alive only burns VM time. Take job
+      // locks before the run lock used by appendEvent, matching queue lifecycle
+      // transactions and avoiding a jobs<->runs deadlock with a finishing child.
+      const cancelled = await tx<{ id: string }>(
+        `WITH RECURSIVE descendants AS (
+           SELECT id FROM jobs WHERE parent_job_id = $1
+           UNION ALL
+           SELECT j.id FROM jobs j JOIN descendants d ON j.parent_job_id = d.id
+         )
+         UPDATE jobs SET status = 'cancelled', lease_expires_at = NULL,
+                         finished_at = now(), error = 'root captain finished'
+         WHERE id IN (SELECT id FROM descendants)
+           AND status NOT IN ('succeeded','failed','cancelled')
+           AND EXISTS (
+             SELECT 1 FROM runs WHERE id = $2
+               AND status NOT IN ('completed','failed','cancelled')
+           )
+         RETURNING id`,
+        [job.id, job.runId],
+      );
+      const cancelledIds = cancelled.map((row) => row.id).sort();
+      if (cancelledIds.length > 0) {
+        await tx(
+          `UPDATE agents SET status = 'cancelled', stopped_at = now()
+           WHERE job_id = ANY($1::text[]) AND stopped_at IS NULL`,
+          [cancelledIds],
+        );
+        for (const jobId of cancelledIds) {
+          await appendEvent(tx, jobStatusEvent({
+            runId: job.runId, jobId, to: "cancelled",
+            detail: "root captain finished",
+          }));
+        }
+      }
 
       // Claims the run and reads its thread in one statement. Zero rows means
       // someone else finished it first, which makes double-finishing - two

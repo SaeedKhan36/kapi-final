@@ -35,6 +35,10 @@ function agentRuntimeEnv(): Record<string, string> {
 export type ProvisionerOptions = {
   provider?: VmProvider;
   intervalMs?: number;
+  /** How long a created VM may go without claiming its queued job. */
+  provisioningTimeoutMs?: number;
+  /** Delay before retrying a job whose prior VM failed to provision. */
+  retryDelayMs?: number;
   /** Where the agent dials back to. Must be reachable FROM the VM. */
   publicUrl?: string;
   /**
@@ -93,6 +97,7 @@ export class Provisioner {
     if (this.#busy) return [];
     this.#busy = true;
     try {
+      await this.reapStaleProvisioning();
       const pending = await this.#pending();
       await this.#announceBudgetStops();
       const started: Job[] = [];
@@ -148,6 +153,12 @@ export class Provisioner {
              SELECT 1 FROM agents a WHERE a.job_id = j.id AND a.stopped_at IS NULL
            )
            AND NOT EXISTS (
+             SELECT 1 FROM agents retry
+             WHERE retry.job_id = j.id AND retry.stopped_at IS NOT NULL
+               AND retry.status IN ('provision-failed','agent-start-failed','provision-timeout')
+               AND retry.stopped_at > $3
+           )
+           AND NOT EXISTS (
              SELECT 1 FROM jobs d WHERE d.id = ANY(j.depends_on) AND d.status <> 'succeeded'
            )
        )
@@ -159,7 +170,12 @@ export class Provisioner {
        WHERE live_count + rn <= max_concurrent_vms
        ORDER BY priority DESC, created_at ASC
        LIMIT $1`,
-      [limit, this.opts.runId ?? null],
+      [
+        limit,
+        this.opts.runId ?? null,
+        new Date(Date.now() - (this.opts.retryDelayMs ??
+          Number(process.env.KAPI_PROVISION_RETRY_SECONDS ?? 15) * 1000)),
+      ],
     );
     return rows.map(toJob);
   }
@@ -247,6 +263,22 @@ export class Provisioner {
       throw err;
     }
 
+    // A different plane may have timed this reservation out while create()
+    // was blocked in the provider. Attach the real provider id only if the
+    // reservation is still live; otherwise tear the late resource straight
+    // back down instead of reviving a released job.
+    const attached = await this.handle.raw<{ job_id: string }>(
+      `UPDATE agents SET vm_id = $2, provider=$3, accounted_through=now()
+       WHERE job_id = $1 AND status = 'provisioning' AND stopped_at IS NULL
+       RETURNING job_id`,
+      [job.id, vm.id, this.#provider.name],
+    );
+    if (attached.length === 0) {
+      await this.#provider.destroy(vm.id).catch(() => {});
+      throw new Error("provisioning reservation expired while the VM was being created");
+    }
+    this.#started.set(job.id, vm.id);
+
     try {
       await this.#provider.writeFile(vm.id, `${vm.workdir}/agent.mjs`, bundle);
 
@@ -267,16 +299,11 @@ export class Provisioner {
     } catch (err) {
       // Never leave a VM running for an agent that failed to start.
       await this.#provider.destroy(vm.id).catch(() => {});
+      this.#started.delete(job.id);
       await this.#release(job.id, "agent-start-failed");
       throw err;
     }
 
-    // The provider's id, not ours: destroy() and readFile() address it that way.
-    await this.handle.raw(
-      `UPDATE agents SET vm_id = $2, provider=$3, accounted_through=now() WHERE job_id = $1`,
-      [job.id, vm.id, this.#provider.name],
-    );
-    this.#started.set(job.id, vm.id);
     this.#log(`${job.kind}/${job.role} ${job.id} -> ${this.#provider.name} vm ${vm.id}`);
     return vm.id;
   }
@@ -285,6 +312,50 @@ export class Provisioner {
     await this.handle.raw(
       `UPDATE agents SET status = $2, stopped_at = now() WHERE job_id = $1`, [jobId, status],
     );
+  }
+
+  /**
+   * Closes VMs that booted but never claimed their job.
+   *
+   * Queued jobs have no lease for the ordinary reaper to expire. Without this
+   * separate deadline, a provisioning agent row blocks that job forever while
+   * the provider resource can continue billing until its idle TTL fires.
+   */
+  async reapStaleProvisioning(now = new Date()): Promise<number> {
+    const timeoutMs = this.opts.provisioningTimeoutMs ??
+      Number(process.env.KAPI_PROVISION_TIMEOUT_SECONDS ?? 120) * 1000;
+    const cutoff = new Date(+now - timeoutMs);
+    const rows = await this.handle.raw<{ job_id: string; vm_id: string | null }>(
+      `UPDATE agents a SET status = 'provision-timeout', stopped_at = $1
+       FROM jobs j
+       WHERE a.job_id = j.id
+         AND a.status = 'provisioning' AND a.stopped_at IS NULL
+         AND j.status = 'queued'
+         AND COALESCE(a.last_heartbeat, a.started_at) <= $2
+         AND ($3::text IS NULL OR a.run_id = $3::text)
+       RETURNING a.job_id, a.vm_id`,
+      [now, cutoff, this.opts.runId ?? null],
+    );
+    for (const row of rows) {
+      if (row.vm_id) await this.#destroyVm(row.job_id, row.vm_id);
+      this.#started.delete(row.job_id);
+      this.#log(`timed out provisioning ${row.job_id}; released it for retry`);
+    }
+    return rows.length;
+  }
+
+  async #destroyVm(jobId: string, vmId: string): Promise<boolean> {
+    const ownedHere = this.#started.get(jobId) === vmId;
+    if (ownedHere) {
+      const direct = await this.#provider.destroy(vmId).then(() => true).catch(() => false);
+      if (direct) return true;
+    }
+    const orphan = await this.#provider.destroyOrphan?.(vmId).catch(() => false);
+    if (orphan) return true;
+    if (!ownedHere) {
+      return this.#provider.destroy(vmId).then(() => true).catch(() => false);
+    }
+    return false;
   }
 
   async #announceBudgetStops() {
@@ -317,11 +388,10 @@ export class Provisioner {
     );
     let destroyed = 0;
     for (const row of rows) {
-      const ok = await this.#provider.destroy(row.vm_id).then(() => true).catch(() => false);
-      // A VM this process did not create has no cached handle; providers that
-      // can address one by id reattach rather than leaking it.
-      const orphan = ok ? false : await this.#provider.destroyOrphan?.(row.vm_id).catch(() => false);
-      if (ok || orphan) destroyed++;
+      // After a process restart the provider may have no in-memory handle for
+      // this id, so use its reattachment path instead of accepting a no-op
+      // destroy as success.
+      if (await this.#destroyVm(row.job_id, row.vm_id)) destroyed++;
       await this.handle.raw(`UPDATE agents SET vm_id = NULL WHERE job_id = $1`, [row.job_id]);
       this.#started.delete(row.job_id);
     }

@@ -275,6 +275,39 @@ await test("a job is not provisioned twice", async () => {
   equal(new Set(all).size, all.length, "no job was handed two VMs");
 });
 
+await test("an agent that never claims is destroyed and its job becomes retryable", async () => {
+  const s = await seedRun(handle);
+  const job = await echoJob(s.runId, { instruction: "recover a silent bootstrap" });
+  const silent = await provider.create({
+    name: `silent-${job.id}`,
+    metadata: { jobId: job.id, runId: s.runId, planeId: "test" },
+  });
+  await handle.raw(
+    `INSERT INTO agents (job_id,run_id,role,status,vm_id,provider,last_heartbeat)
+     VALUES ($1,$2,'backend','provisioning',$3,'local',$4)`,
+    [job.id, s.runId, silent.id, new Date(Date.now() - 60_000)],
+  );
+  const recovery = new Provisioner(handle, {
+    provider, publicUrl: base, runId: s.runId,
+    provisioningTimeoutMs: 1, retryDelayMs: 0, onLog: () => {},
+  });
+
+  equal(await recovery.reapStaleProvisioning(), 1, "the silent VM timed out");
+  const stale = await handle.raw<{ status: string; stopped_at: string | null }>(
+    `SELECT status,stopped_at FROM agents WHERE job_id=$1`, [job.id],
+  );
+  equal(stale[0]?.status, "provision-timeout", "the stale reservation was closed");
+  assert(stale[0]?.stopped_at != null, "the row no longer blocks provisioning");
+  equal((await getJob(handle, job.id))?.status, "queued", "the work stayed queued");
+
+  const restarted = await recovery.tick();
+  assert(restarted.some((candidate) => candidate.id === job.id), "a replacement VM was started");
+  await waitFor("the replacement after provisioning timeout", async () => {
+    const current = await getJob(handle, job.id);
+    return current?.status === "succeeded" ? current : null;
+  });
+});
+
 await test("the concurrency budget caps how many VMs a run gets at once", async () => {
   const s = await seedRun(handle);
   await handle.raw(`UPDATE runs SET max_concurrent_vms = 2 WHERE id = $1`, [s.runId]);
