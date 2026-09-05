@@ -117,6 +117,7 @@ export const captainRole: RoleHandler = async (rc) => {
   const { job, client } = rc;
   const context = job.payload.context as {
     repoUrl?: string; baseBranch?: string; brief?: string;
+    threadHistory?: Array<{ role: string; content: string }>;
   };
 
   const cwd = await mkdtemp(join(rc.workdir || tmpdir(), "explore-"));
@@ -146,6 +147,7 @@ export const captainRole: RoleHandler = async (rc) => {
     acceptance: job.payload.acceptance,
     repoUrl,
     baseBranch,
+    threadHistory: context.threadHistory,
   });
 
   const outcome = await runLoop({

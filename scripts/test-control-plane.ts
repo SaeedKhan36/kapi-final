@@ -463,6 +463,34 @@ await test("a finished root cancels every unfinished descendant", async () => {
   );
 });
 
+await test("a follow-up captain receives the prior conversation", async () => {
+  const thread = await api<{ id: string }>("POST", `/api/projects/${projectId}/threads`, {});
+  const first = await api<{ run: { id: string }; job: { id: string } }>(
+    "POST", `/api/threads/${thread.body.id}/messages`, { content: "first inspect authentication" },
+  );
+  await claim(handle, {
+    vmId: "vm-history", jobId: first.body.job.id, runId: first.body.run.id,
+  });
+  const finished = await complete(handle, first.body.job.id, "vm-history", {
+    ok: true, summary: "authentication uses signed sessions", filesChanged: [], commits: [],
+  });
+  await lifecycle.finishRun(finished!);
+
+  const followup = await api<{ job: { id: string } }>(
+    "POST", `/api/threads/${thread.body.id}/messages`, { content: "now harden that flow" },
+  );
+  const job = await getJob(handle, followup.body.job.id);
+  const history = job?.payload.context.threadHistory as
+    Array<{ role: string; content: string }> | undefined;
+  equal(history?.length, 2, "the completed exchange is carried forward");
+  equal(history?.[0]?.content, "first inspect authentication", "the earlier user goal is present");
+  equal(history?.[1]?.content, "authentication uses signed sessions", "the captain answer is present");
+  assert(
+    !history?.some((message) => message.content === "now harden that flow"),
+    "the current instruction is not duplicated in history",
+  );
+});
+
 /* ------------------------------------------------------------------ */
 
 group("GitHub check webhooks");

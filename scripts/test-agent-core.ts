@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ModelResponse, WireMessage } from "@kapi/protocol";
 import {
-  BUILD_TOOLS, REVIEW_TOOLS, compact, editFileTool, gitCommitTool, grepTool,
+  BUILD_TOOLS, REVIEW_TOOLS, captainBrief, compact, editFileTool, gitCommitTool, grepTool,
   inspectDiffTool, listFiles, prepareRepo, readFileTool, runLoop, runTestsTool,
   submitVerdictTool, verdictFromOutcome, writeFileTool,
   detectTestCommand, shell, type ToolContext,
@@ -16,6 +16,24 @@ import {
 import { assert, equal, group, report, test } from "./harness.ts";
 
 const run = promisify(execFile);
+
+group("captain prompt");
+
+await test("the captain brief renders prior thread turns before the new goal", () => {
+  const brief = captainBrief({
+    goal: "follow up now",
+    acceptance: [],
+    threadHistory: [
+      { role: "user", content: "inspect auth" },
+      { role: "captain", content: "sessions are signed" },
+    ],
+  });
+  assert(brief.includes("## Conversation so far"), "history has an explicit section");
+  assert(brief.includes("### User\ninspect auth"), "the earlier request is attributed");
+  assert(brief.includes("### Captain\nsessions are signed"), "the earlier answer is attributed");
+  assert(brief.indexOf("# Goal\nfollow up now") < brief.indexOf("## Conversation so far"),
+    "the current goal remains primary");
+});
 
 async function scratchRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "kapi-core-"));

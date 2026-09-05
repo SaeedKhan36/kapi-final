@@ -31,6 +31,24 @@ export class RunService {
   }
 
   async startIn(tx: SqlRunner, input: StartRunInput): Promise<StartedRun> {
+      // Read before inserting the new turn so the goal appears exactly once:
+      // as the job instruction. Keep the newest useful context within a hard
+      // character budget; a long-lived thread must not grow every captain's
+      // prompt without bound.
+      const priorRows = await tx<{ role: string; content: string }>(
+        `SELECT role, LEFT(content, 4000) AS content
+         FROM messages WHERE thread_id = $1
+         ORDER BY created_at DESC, id DESC LIMIT 20`,
+        [input.thread.id],
+      );
+      const threadHistory: Array<{ role: string; content: string }> = [];
+      let remainingHistoryChars = 16_000;
+      for (const prior of priorRows) {
+        if (remainingHistoryChars <= 0) break;
+        const content = prior.content.slice(0, remainingHistoryChars);
+        threadHistory.unshift({ role: prior.role, content });
+        remainingHistoryChars -= content.length;
+      }
       const run = await this.store.createRunIn(tx, {
         threadId: input.thread.id,
         projectId: input.project.id,
@@ -61,6 +79,7 @@ export class RunService {
           baseBranch: input.project.defaultBranch,
           threadId: input.thread.id,
           projectId: input.project.id,
+          ...(threadHistory.length > 0 ? { threadHistory } : {}),
           ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
         },
       });

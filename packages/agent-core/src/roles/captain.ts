@@ -49,7 +49,15 @@ export function captainBrief(args: {
   acceptance: string[];
   repoUrl?: string | null;
   baseBranch?: string;
+  threadHistory?: Array<{ role: string; content: string }>;
 }): string {
+  const history = args.threadHistory?.length
+    ? `## Conversation so far\n${args.threadHistory.map((message) => {
+      const speaker = message.role === "captain" ? "Captain" :
+        message.role === "system" ? "System" : "User";
+      return `### ${speaker}\n${message.content}`;
+    }).join("\n\n")}`
+    : "";
   return [
     `# Goal`,
     args.goal,
@@ -60,6 +68,7 @@ export function captainBrief(args: {
     args.repoUrl
       ? `## Repository\n${args.repoUrl}${args.baseBranch ? ` (base branch: ${args.baseBranch})` : ""}`
       : "",
+    history,
     "",
     "Explore the repository first, then decide what to delegate and to whom.",
   ].filter(Boolean).join("\n");
