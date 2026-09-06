@@ -157,24 +157,40 @@ export function createApp(deps: {
     if (required && c.req.header("authorization") !== `Bearer ${required}`) return c.text("unauthorized\n", 401);
     const rows = await handle.raw<{
       queued: number; leased: number; dead: number; active_vms: number; scheduler_lag: number;
-      vm_seconds: number; budget_exhaustions: number;
+      vm_seconds: number; budget_exhaustions: number; expired_leases: number;
+      failed_runs: number; vm_budget_violations: number; orphan_agent_rows: number;
     }>(`SELECT
       (SELECT count(*)::int FROM jobs WHERE status='queued') queued,
       (SELECT count(*)::int FROM jobs WHERE status IN ('claimed','running')) leased,
       (SELECT count(*)::int FROM jobs WHERE status='failed') dead,
+      (SELECT count(*)::int FROM runs WHERE status='failed') failed_runs,
       (SELECT count(*)::int FROM agents WHERE stopped_at IS NULL) active_vms,
+      (SELECT count(*)::int FROM jobs WHERE status IN ('claimed','running') AND lease_expires_at < now()) expired_leases,
+      (SELECT count(*)::int FROM runs r WHERE
+        (SELECT count(*) FROM agents a WHERE a.run_id=r.id AND a.stopped_at IS NULL) > r.max_concurrent_vms
+      ) vm_budget_violations,
+      (SELECT count(*)::int FROM agents a LEFT JOIN jobs j ON j.id=a.job_id
+        WHERE a.stopped_at IS NULL AND (j.id IS NULL OR j.status IN ('succeeded','failed','cancelled'))
+      ) orphan_agent_rows,
       (SELECT COALESCE(sum(vm_seconds),0)::int FROM runs) vm_seconds,
       (SELECT count(*)::int FROM events WHERE kind='agent.message' AND payload->>'type'='budget.exhausted') budget_exhaustions,
       (SELECT COALESCE(EXTRACT(EPOCH FROM now()-min(next_run_at)),0)::int FROM schedules
         WHERE enabled=true AND deleted_at IS NULL AND next_run_at < now()) scheduler_lag`);
     const m = rows[0] ?? { queued: 0, leased: 0, dead: 0, active_vms: 0, scheduler_lag: 0,
-      vm_seconds: 0, budget_exhaustions: 0 };
+      vm_seconds: 0, budget_exhaustions: 0, expired_leases: 0, failed_runs: 0,
+      vm_budget_violations: 0, orphan_agent_rows: 0 };
     return c.text([
-      `kapi_queue_queued ${m.queued}`, `kapi_queue_leased ${m.leased}`,
-      `kapi_jobs_failed_total ${m.dead}`, `kapi_vms_active ${m.active_vms}`,
-      `kapi_scheduler_lag_seconds ${m.scheduler_lag}`, "",
-      `kapi_vm_seconds_total ${m.vm_seconds}`,
-      `kapi_budget_exhaustions_total ${m.budget_exhaustions}`, "",
+      "# TYPE kapi_queue_queued gauge", `kapi_queue_queued ${m.queued}`,
+      "# TYPE kapi_queue_leased gauge", `kapi_queue_leased ${m.leased}`,
+      "# TYPE kapi_jobs_failed gauge", `kapi_jobs_failed ${m.dead}`,
+      "# TYPE kapi_runs_failed gauge", `kapi_runs_failed ${m.failed_runs}`,
+      "# TYPE kapi_vms_active gauge", `kapi_vms_active ${m.active_vms}`,
+      "# TYPE kapi_leases_expired gauge", `kapi_leases_expired ${m.expired_leases}`,
+      "# TYPE kapi_vm_budget_violations gauge", `kapi_vm_budget_violations ${m.vm_budget_violations}`,
+      "# TYPE kapi_orphan_agent_rows gauge", `kapi_orphan_agent_rows ${m.orphan_agent_rows}`,
+      "# TYPE kapi_scheduler_lag_seconds gauge", `kapi_scheduler_lag_seconds ${m.scheduler_lag}`,
+      "# TYPE kapi_vm_seconds_total counter", `kapi_vm_seconds_total ${m.vm_seconds}`,
+      "# TYPE kapi_budget_exhaustions_total counter", `kapi_budget_exhaustions_total ${m.budget_exhaustions}`, "",
     ].join("\n"), 200, { "content-type": "text/plain; version=0.0.4" });
   });
 

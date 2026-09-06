@@ -20,6 +20,7 @@
     "release:staging": "tsx scripts/probe-staging-lifecycle.ts",
     "release:snapshot-counts": "tsx scripts/verify-restore.ts --snapshot",
     "release:verify-restore": "tsx scripts/verify-restore.ts",
+    "release:canary": "KAPI_SMOKE_REQUIRE_PRODUCTION=true pnpm test:smoke && pnpm release:staging",
     "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:studio": "drizzle-kit studio --config=packages/db/drizzle.config.ts",

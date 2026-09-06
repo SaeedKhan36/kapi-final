@@ -29,11 +29,11 @@ logs. Never paste cookies, OAuth grants, private keys, installation tokens, or v
 
 ## Operational gates
 
-- [ ] Metrics are scraped and alert rules are loaded.
+- [ ] Metrics are scraped and `ops/prometheus-rules.yml` is loaded.
 - [ ] Reconciliation remains audit-only for at least one orphan grace window.
 - [ ] A fresh backup has been restored and passes `pnpm release:verify-restore`.
 - [ ] The previous application image has been redeployed successfully against the additive schema.
-- [ ] A controlled production canary completes without leaked VMs or unresolved failed jobs.
+- [ ] `pnpm release:canary` completes without leaked VMs or unresolved failed jobs.
 - [ ] Reconciliation deletion is enabled only after the audit and canary are clean.
 
 The ordered rollout and rollback procedure is in [`OPERATIONS.md`](./OPERATIONS.md).

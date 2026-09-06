@@ -110,6 +110,11 @@ orphan detection, reconciliation deletion failure, VM counts above budget, webho
 signature failures, and model/VM budget exhaustion. Logs are JSON and carry request IDs;
 run, job, and agent identifiers are included in domain events.
 
+Prometheus-compatible rules for the exported database-backed signals are provided in
+[`ops/prometheus-rules.yml`](./ops/prometheus-rules.yml). Configure separate log alerts for
+`vm.orphan_detected`, `queue.lease_expired`, webhook authentication failures, and reconciler
+exceptions because those occur at process/provider boundaries rather than in durable counters.
+
 The provisioner releases and destroys a VM that does not claim its queued job within
 `KAPI_PROVISION_TIMEOUT_SECONDS` (default 120), then waits
 `KAPI_PROVISION_RETRY_SECONDS` (default 15) before retrying provisioning failures.
@@ -121,3 +126,11 @@ and accounting enabled so leases and charges settle. For suspected bad deletion,
 set `KAPI_RECONCILE_DELETE=false`; the audit pass remains available. Restore database state
 before restarting agents, because provider resources without matching live database rows are
 deliberately classified as orphans after the grace period.
+
+## Canary decision
+
+Run `pnpm release:canary` with the smoke and staging-probe environment described above. Do
+not enable general availability unless it passes, all alert rules remain quiet, the provider
+inventory contains no unowned VM, and reconciliation has completed at least one full orphan
+grace window in audit-only mode. Record the commit, run ID, pull request, CI delivery, start
+and finish time, and operator in [`RELEASE.md`](./RELEASE.md).

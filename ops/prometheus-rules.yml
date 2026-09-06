@@ -1,0 +1,57 @@
+groups:
+  - name: kapi-release
+    rules:
+      - alert: KapiApiUnavailable
+        expr: up{job="kapi-api"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Kapi API has not been scrapeable for two minutes
+
+      - alert: KapiQueueStalled
+        expr: kapi_queue_queued > 0 and kapi_queue_leased == 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: Kapi has queued work but no leased jobs
+
+      - alert: KapiExpiredLeases
+        expr: kapi_leases_expired > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: Agent leases are remaining expired between reaper passes
+
+      - alert: KapiSchedulerLag
+        expr: kapi_scheduler_lag_seconds > 120
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: Kapi scheduler is more than two minutes behind
+
+      - alert: KapiFailedWork
+        expr: kapi_jobs_failed > 0 or kapi_runs_failed > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: Kapi has terminal failed work requiring triage
+
+      - alert: KapiVmBudgetInvariant
+        expr: kapi_vm_budget_violations > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: A run has more active VMs than its configured limit
+
+      - alert: KapiOrphanAgentRows
+        expr: kapi_orphan_agent_rows > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Active agent rows disagree with terminal or missing jobs
+
+      - alert: KapiBudgetExhaustion
+        expr: increase(kapi_budget_exhaustions_total[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: A Kapi run exhausted a configured budget

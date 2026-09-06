@@ -112,6 +112,27 @@ await test("production observability and webhook routes fail closed without shar
   }
 });
 
+await test("authenticated metrics expose release-critical queue and lifecycle signals", async () => {
+  const prior = process.env.KAPI_METRICS_TOKEN;
+  try {
+    process.env.KAPI_METRICS_TOKEN = "metrics-test";
+    equal((await fetch(`${base}/metrics`)).status, 401, "metrics require the configured token");
+    const response = await fetch(`${base}/metrics`, {
+      headers: { authorization: "Bearer metrics-test" },
+    });
+    equal(response.status, 200, "authorized scrape succeeds");
+    const body = await response.text();
+    for (const metric of [
+      "kapi_queue_queued", "kapi_jobs_failed", "kapi_runs_failed", "kapi_leases_expired",
+      "kapi_vm_budget_violations", "kapi_orphan_agent_rows", "kapi_scheduler_lag_seconds",
+      "kapi_budget_exhaustions_total",
+    ]) assert(body.includes(metric), `${metric} is exported`);
+  } finally {
+    if (prior === undefined) delete process.env.KAPI_METRICS_TOKEN;
+    else process.env.KAPI_METRICS_TOKEN = prior;
+  }
+});
+
 /* ------------------------------------------------------------------ */
 
 group("projects and threads");
