@@ -9,6 +9,7 @@ import { UsageAccounting } from "../apps/control-plane/src/accounting.ts";
 import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { validateProductionConfig, validateReleaseConfig } from "../apps/control-plane/src/config.ts";
+import { evaluateLifecycle } from "./staging-evidence.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
 
 process.env.KAPI_PGLITE_DIR = "memory://operations-test";
@@ -116,6 +117,31 @@ await test("production URLs, origins, and encryption keys are hardened", async (
     () => validateProductionConfig("api", { ...productionApiEnv(), KAPI_SECRET_KEY: "too-short" }),
     "the vault key must be 256-bit",
   );
+});
+
+await test("staging evidence requires the complete adaptive fleet lifecycle", () => {
+  const runId = "run_staging";
+  const complete = evaluateLifecycle({
+    run: { id: runId, status: "completed", finishedAt: new Date().toISOString() },
+    jobs: [
+      { id: "job_captain", parentJobId: null, kind: "captain", status: "succeeded" },
+      { id: "job_build", parentJobId: "job_captain", kind: "build", status: "succeeded",
+        result: { commits: ["abc123"], prUrl: "https://github.com/kapi/test/pull/1" } },
+      { id: "job_review", parentJobId: "job_captain", kind: "review", status: "succeeded",
+        result: { review: { decision: "approve" } } },
+    ],
+    events: [{ kind: "ci.completed" }],
+    agents: [{ stopped_at: new Date().toISOString() }],
+  }, { messages: [{ role: "captain", runId, content: "Completed." }] });
+  assert(complete.ok, "complete lifecycle passes");
+
+  const incomplete = evaluateLifecycle({
+    run: { id: runId, status: "completed", finishedAt: new Date().toISOString() },
+    jobs: [{ id: "job_captain", parentJobId: null, kind: "captain", status: "succeeded" }],
+    events: [], agents: [{ stopped_at: null }],
+  }, { messages: [] });
+  assert(!incomplete.ok, "missing Build, Review, CI, reply, and cleanup evidence fails");
+  assert(incomplete.checks.filter((check) => !check.ok).length >= 5, "every missing gate is reported");
 });
 
 group("scheduler");

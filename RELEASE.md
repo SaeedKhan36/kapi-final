@@ -21,7 +21,7 @@ See [`VERIFICATION.md`](./VERIFICATION.md) for the recorded commands and counts.
 - [ ] The GitHub App is installed with Contents write permission on the canary repository.
 - [ ] Signed `check_run` or `check_suite` deliveries reach the Captain's inbox.
 - [ ] The Daytona provider probe creates, executes in, and destroys a sandbox.
-- [ ] One real run completes Captain → Build → PR/CI → Review → Captain.
+- [ ] `pnpm release:staging` proves one real Captain → Build → PR/CI → Review → Captain run.
 - [ ] The production smoke command passes with an authenticated session and project.
 
 For each item, record the date, environment, commit SHA, operator, and a link to redacted

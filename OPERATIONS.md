@@ -46,6 +46,22 @@ For authenticated read-path coverage, add a short-lived test-session cookie thro
 `KAPI_SMOKE_COOKIE`; optionally set `KAPI_SMOKE_PROJECT_ID` to verify project and GitHub App
 readiness. Keep the cookie in the deployment secret store, never in shell history or CI logs.
 
+After the read-only smoke test passes, use a dedicated canary repository to prove the complete
+adaptive lifecycle. The goal must be a small real change that requires Build and Review work.
+The probe creates a thread and run, waits up to 45 minutes by default, requires PR and CI
+evidence, and cancels an unfinished run on timeout:
+
+```bash
+KAPI_SMOKE_URL=https://api.example.com \
+KAPI_SMOKE_COOKIE=... \
+KAPI_SMOKE_PROJECT_ID=... \
+KAPI_STAGING_GOAL="Make the documented canary change, test it, and have it reviewed." \
+pnpm release:staging
+```
+
+Use `KAPI_STAGING_TIMEOUT_SECONDS` and `KAPI_STAGING_POLL_SECONDS` to adjust timing. The probe
+never prints the session cookie.
+
 Migrations are forward-compatible column/table additions. To roll application code back,
 redeploy the prior image and leave the added schema in place. Never manually delete a
 migration row. A destructive schema rollback requires a verified backup and a maintenance
