@@ -25,11 +25,11 @@ services:
       - key: KAPI_SESSION_SECRET
         sync: false
       - key: KAPI_ALLOWED_ORIGINS
-        sync: false
+        value: https://kapi-web.onrender.com
       - key: KAPI_WEB_URL
-        sync: false
+        value: https://kapi-web.onrender.com
       - key: CONTROL_PLANE_PUBLIC_URL
-        sync: false
+        value: https://kapi-api.onrender.com
       - key: WORKOS_CLIENT_ID
         sync: false
       - key: WORKOS_API_KEY
@@ -59,7 +59,9 @@ services:
       - key: KAPI_SECRET_KEY
         sync: false
       - key: CONTROL_PLANE_PUBLIC_URL
-        sync: false
+        value: https://kapi-api.onrender.com
+      - key: KAPI_PLANE_ID
+        value: kapi-production
       - key: VM_PROVIDER
         value: daytona
       - key: DAYTONA_API_KEY
@@ -77,7 +79,7 @@ services:
     autoDeployTrigger: checksPass
     envVars:
       - key: VITE_API_URL
-        sync: false
+        value: https://kapi-api.onrender.com
     routes:
       - type: rewrite
         source: /*
