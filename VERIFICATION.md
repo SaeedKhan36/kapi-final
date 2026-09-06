@@ -22,14 +22,14 @@ All database-backed suites use either independent in-memory PGlite databases or 
 
 ## External release gates
 
-The repository is locally verified, but release sign-off still requires environment-owned
-evidence:
+The repository is locally verified. Commit `41f8609` is pushed to `main`, and the hosted
+`Release candidate` workflow passed for that exact commit on 2026-09-05. Release sign-off
+still requires environment-owned evidence:
 
-1. Push the commit series and pass hosted CI.
-2. Deploy staging with real WorkOS, Codex, GitHub App, and Daytona integrations.
-3. Run the authenticated staging smoke test and one real repository lifecycle.
-4. Exercise database restore and application rollback procedures.
-5. Complete a controlled production canary before general availability.
+1. Deploy staging with real WorkOS, Codex, GitHub App, and Daytona integrations.
+2. Run the authenticated staging smoke test and one real repository lifecycle.
+3. Exercise database restore and application rollback procedures.
+4. Complete a controlled production canary before general availability.
 
 Operational commands and required environment variables are documented in
 [`OPERATIONS.md`](./OPERATIONS.md).
