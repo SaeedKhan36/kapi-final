@@ -56,3 +56,45 @@ export function validateProductionConfig(
     throw new Error("VM_PROVIDER=local is not allowed for production operations; use docker or daytona");
   }
 }
+
+export type ReleaseConfigRole = "api" | "worker" | "web";
+
+/**
+ * Stricter than runtime validation: this proves a service is configured for the
+ * complete Kapi product, including integrations that the API may legitimately
+ * omit while running in a reduced development or maintenance mode.
+ */
+export function validateReleaseConfig(
+  role: ReleaseConfigRole, input: NodeJS.ProcessEnv = process.env,
+): void {
+  const env: NodeJS.ProcessEnv = { ...input, NODE_ENV: "production" };
+
+  if (role === "api") {
+    validateProductionConfig("api", env);
+    const required = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"];
+    const missing = required.filter((key) => !env[key]?.trim());
+    if (missing.length) {
+      throw new Error(`missing release integration configuration: ${missing.join(", ")}`);
+    }
+    const expectedCallback = new URL("/auth/callback", env.CONTROL_PLANE_PUBLIC_URL!).toString();
+    if (new URL(env.WORKOS_REDIRECT_URI!).toString() !== expectedCallback) {
+      throw new Error(`WORKOS_REDIRECT_URI must be ${expectedCallback}`);
+    }
+    return;
+  }
+
+  if (role === "worker") {
+    validateProductionConfig("worker", env);
+    return;
+  }
+
+  const required = ["VITE_API_URL", "CONTROL_PLANE_PUBLIC_URL"];
+  const missing = required.filter((key) => !env[key]?.trim());
+  if (missing.length) throw new Error(`missing required web configuration: ${missing.join(", ")}`);
+  const api = new URL(env.VITE_API_URL!);
+  const plane = new URL(env.CONTROL_PLANE_PUBLIC_URL!);
+  if (api.protocol !== "https:") throw new Error("VITE_API_URL must use https in production");
+  if (api.origin !== plane.origin || api.pathname.replace(/\/$/, "") !== plane.pathname.replace(/\/$/, "")) {
+    throw new Error("VITE_API_URL must point at CONTROL_PLANE_PUBLIC_URL");
+  }
+}

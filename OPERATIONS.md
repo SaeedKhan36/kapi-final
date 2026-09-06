@@ -17,6 +17,15 @@ Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
 `$CONTROL_PLANE_PUBLIC_URL/auth/callback` and the GitHub webhook as
 `$CONTROL_PLANE_PUBLIC_URL/webhooks/github`.
 
+Before starting each service, load that service's production environment and run its strict
+release preflight. This validates configuration without printing secret values:
+
+```bash
+pnpm release:preflight -- --role=api
+pnpm release:preflight -- --role=worker
+pnpm release:preflight -- --role=web
+```
+
 ## Rollout and rollback
 
 1. Deploy the database migration and API with the operations worker scaled to zero.

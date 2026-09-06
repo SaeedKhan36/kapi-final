@@ -8,7 +8,7 @@ import { Scheduler, nextOccurrence } from "../apps/control-plane/src/scheduler.t
 import { UsageAccounting } from "../apps/control-plane/src/accounting.ts";
 import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
-import { validateProductionConfig } from "../apps/control-plane/src/config.ts";
+import { validateProductionConfig, validateReleaseConfig } from "../apps/control-plane/src/config.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
 
 process.env.KAPI_PGLITE_DIR = "memory://operations-test";
@@ -56,6 +56,34 @@ const productionApiEnv = (): NodeJS.ProcessEnv => ({
 
 await test("a complete production API configuration passes validation", () => {
   validateProductionConfig("api", productionApiEnv());
+});
+
+await test("release preflight requires complete API integrations and exact public URLs", async () => {
+  const complete: NodeJS.ProcessEnv = {
+    ...productionApiEnv(),
+    GITHUB_APP_ID: "123",
+    GITHUB_APP_PRIVATE_KEY: "encoded-key",
+  };
+  validateReleaseConfig("api", complete);
+  validateReleaseConfig("worker", {
+    ...complete, VM_PROVIDER: "daytona", DAYTONA_API_KEY: "daytona-test-key",
+  });
+  validateReleaseConfig("web", {
+    ...complete, VITE_API_URL: complete["CONTROL_PLANE_PUBLIC_URL"],
+  });
+
+  await throws(
+    () => validateReleaseConfig("api", productionApiEnv()),
+    "release API requires its GitHub App",
+  );
+  await throws(
+    () => validateReleaseConfig("api", { ...complete, WORKOS_REDIRECT_URI: "https://api.example.com/wrong" }),
+    "release callback must match the public control-plane URL",
+  );
+  await throws(
+    () => validateReleaseConfig("web", { ...complete, VITE_API_URL: "https://other.example.com" }),
+    "web build must target the deployed API",
+  );
 });
 
 await test("production never exposes unsigned metrics or GitHub webhooks", async () => {

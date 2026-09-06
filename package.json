@@ -16,6 +16,7 @@
     "verify": "pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:web",
     "test:operations": "tsx scripts/test-operations.ts",
     "test:smoke": "tsx scripts/smoke-production.ts",
+    "release:preflight": "tsx scripts/preflight-production.ts",
     "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:studio": "drizzle-kit studio --config=packages/db/drizzle.config.ts",
