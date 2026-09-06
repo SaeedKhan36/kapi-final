@@ -31,7 +31,7 @@ logs. Never paste cookies, OAuth grants, private keys, installation tokens, or v
 
 - [ ] Metrics are scraped and alert rules are loaded.
 - [ ] Reconciliation remains audit-only for at least one orphan grace window.
-- [ ] A fresh backup has been restored into an isolated database and verified.
+- [ ] A fresh backup has been restored and passes `pnpm release:verify-restore`.
 - [ ] The previous application image has been redeployed successfully against the additive schema.
 - [ ] A controlled production canary completes without leaked VMs or unresolved failed jobs.
 - [ ] Reconciliation deletion is enabled only after the audit and canary are clean.

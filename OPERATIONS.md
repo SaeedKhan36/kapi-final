@@ -75,6 +75,24 @@ migration. Quarterly, restore the newest backup into a separate database, run
 Record the restore duration and any missing secrets; encrypted connection records require
 the matching `KAPI_SECRET_KEY`.
 
+At backup time, capture counts that contain no row contents:
+
+```bash
+pnpm release:snapshot-counts
+```
+
+After restoring into a separate database, run the repository verifier with that JSON. It
+connects without applying schema changes, verifies every migration, compares all durable
+table counts, checks event cursors and active leases, and decrypts every encrypted envelope
+without printing its plaintext:
+
+```bash
+KAPI_RESTORE_DATABASE_URL=... \
+KAPI_RESTORE_CONFIRM_ISOLATED=true \
+KAPI_RESTORE_EXPECTED_COUNTS='{"users":1,"projects":1,...}' \
+KAPI_SECRET_KEY=... pnpm release:verify-restore
+```
+
 ## Secrets and rotation
 
 - Rotate `KAPI_SESSION_SECRET` by forcing all sessions to sign in again.

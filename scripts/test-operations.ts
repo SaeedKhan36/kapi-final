@@ -10,6 +10,7 @@ import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { validateProductionConfig, validateReleaseConfig } from "../apps/control-plane/src/config.ts";
 import { evaluateLifecycle } from "./staging-evidence.ts";
+import { RESTORE_TABLES, compareRestoreCounts, parseExpectedCounts } from "./restore-evidence.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
 
 process.env.KAPI_PGLITE_DIR = "memory://operations-test";
@@ -142,6 +143,21 @@ await test("staging evidence requires the complete adaptive fleet lifecycle", ()
   }, { messages: [] });
   assert(!incomplete.ok, "missing Build, Review, CI, reply, and cleanup evidence fails");
   assert(incomplete.checks.filter((check) => !check.ok).length >= 5, "every missing gate is reported");
+});
+
+await test("restore evidence requires exact counts for every durable table", async () => {
+  const counts = Object.fromEntries(RESTORE_TABLES.map((table, index) => [table, index])) as
+    Record<(typeof RESTORE_TABLES)[number], number>;
+  const parsed = parseExpectedCounts(JSON.stringify(counts));
+  equal(compareRestoreCounts(parsed, counts).length, 0, "matching snapshot passes");
+  const changed = { ...counts, events: counts.events + 1 };
+  const differences = compareRestoreCounts(parsed, changed);
+  equal(differences.length, 1, "one changed table produces one mismatch");
+  equal(differences[0]?.table, "events", "the changed table is named");
+  await throws(
+    () => parseExpectedCounts(JSON.stringify({ projects: 1 })),
+    "partial snapshots are rejected",
+  );
 });
 
 group("scheduler");

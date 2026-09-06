@@ -18,6 +18,8 @@
     "test:smoke": "tsx scripts/smoke-production.ts",
     "release:preflight": "tsx scripts/preflight-production.ts",
     "release:staging": "tsx scripts/probe-staging-lifecycle.ts",
+    "release:snapshot-counts": "tsx scripts/verify-restore.ts --snapshot",
+    "release:verify-restore": "tsx scripts/verify-restore.ts",
     "db:push": "drizzle-kit push --config=packages/db/drizzle.config.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:studio": "drizzle-kit studio --config=packages/db/drizzle.config.ts",
