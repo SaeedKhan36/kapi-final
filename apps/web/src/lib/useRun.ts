@@ -26,6 +26,7 @@ export function useRun(runId: string | null) {
   const [state, setState] = useState<RunState>(() => emptyRunState());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyReadyFor, setHistoryReadyFor] = useState<string | null>(null);
   const cursor = useRef(0);
 
   useEffect(() => {
@@ -33,6 +34,7 @@ export function useRun(runId: string | null) {
     setRun(null);
     setState(emptyRunState());
     setError(null);
+    setHistoryReadyFor(null);
     if (!runId) return;
 
     let dropped = false;
@@ -58,6 +60,7 @@ export function useRun(runId: string | null) {
 
         cursor.current = after;
         setState(next);
+        setHistoryReadyFor(runId);
       } catch (err) {
         if (!dropped) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -88,7 +91,11 @@ export function useRun(runId: string | null) {
       .catch(() => {});
   }, []);
 
-  const connected = useRunStream(runId, cursor, onEvent);
+  // Do not open the socket until the HTTP history is fully hydrated. The
+  // socket resumes from that exact cursor, covering events committed between
+  // the final history page and the WebSocket upgrade without allowing a late
+  // history setState to overwrite already-delivered live events.
+  const connected = useRunStream(historyReadyFor === runId ? runId : null, cursor, onEvent);
 
   // The run row carries counters the event stream does not - llm calls, tokens,
   // spend. Re-read once the run stops rather than polling: while it is running
