@@ -1,19 +1,23 @@
 # Verification record
 
-Repository verification completed on 2026-09-05 after the release-candidate hardening work.
+Repository verification was refreshed on 2026-09-08 after the production-hardening work.
 
 ## Completed gates
 
 - `DATABASE_URL= pnpm verify`
   - TypeScript type-check passed.
   - Agent bundle build passed.
-  - 145 backend checks passed.
+  - 154 backend checks passed.
   - 18 embedded queue checks passed; four real-contention checks were explicitly skipped.
   - Six deterministic UI checks passed.
-  - Production web build passed.
+  - Compiled API, worker, migration, and production web builds passed.
 - `pnpm test:queue` against an isolated PostgreSQL schema: 22 checks passed, including all
   concurrent-claim stress cases.
 - Captain and provisioner budget races passed against isolated PostgreSQL schemas.
+- `pnpm test:runtime` passed migration, API readiness/shutdown, and worker liveness/shutdown.
+- `pnpm test:e2e` passed two Chromium journeys covering the auth boundary and authenticated
+  project creation with client-side navigation.
+- `pnpm audit:prod` reported no known production dependency vulnerabilities.
 - `pnpm test:smoke` against a local control plane passed `/live`, `/ready`, unauthorized
   `/metrics`, and authorized `/metrics` checks.
 
@@ -22,9 +26,9 @@ All database-backed suites use either independent in-memory PGlite databases or 
 
 ## External release gates
 
-The repository is locally verified. Commit `41f8609` is pushed to `main`, and the hosted
-`Release candidate` workflow passed for that exact commit on 2026-09-05. Release sign-off
-still requires environment-owned evidence:
+Both the `Release candidate` workflow (including PostgreSQL 16, Chromium, compiled-runtime,
+and Docker-image jobs) and CodeQL passed for commit `e607614`. Every later release commit must
+have both current workflows green. Release sign-off still requires environment-owned evidence:
 
 1. Deploy staging with real WorkOS, Codex, GitHub App, and Daytona integrations.
 2. Run the authenticated staging smoke test and one real repository lifecycle.

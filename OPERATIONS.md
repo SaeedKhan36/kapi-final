@@ -8,9 +8,11 @@ reaps, meters, reconciles, and provisions. Queue and scheduler claims are databa
 and spawn/VM budgets use the run row as a cross-replica mutex, so a temporary second worker
 remains safe during a rolling deploy.
 
-`pnpm db:migrate` runs as Render's API `preDeployCommand` and is the only production schema
-writer. API and worker startup call the connect/verify path: if the pre-deploy migration is
-missing they fail with an actionable readiness error instead of attempting DDL concurrently.
+The compiled `node apps/control-plane/dist/migrate.mjs` entrypoint runs as Render's API
+`preDeployCommand` and is the only production schema writer (`pnpm db:migrate` is the source
+checkout equivalent). API and worker startup call the connect/verify path: if the pre-deploy
+migration is missing they fail with an actionable readiness error instead of attempting DDL
+concurrently.
 
 Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
 `KAPI_ALLOWED_ORIGINS` to the final HTTPS service URLs. Configure the WorkOS callback as
@@ -25,6 +27,21 @@ pnpm release:preflight -- --role=api
 pnpm release:preflight -- --role=worker
 pnpm release:preflight -- --role=web
 ```
+
+### Environment ownership
+
+| Service | Required production values |
+| --- | --- |
+| API | `DATABASE_URL`, `KAPI_SECRET_KEY`, `KAPI_SESSION_SECRET`, `KAPI_ALLOWED_ORIGINS`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `KAPI_METRICS_TOKEN`, and `KAPI_OPERATIONS=off` |
+| Worker | The same `DATABASE_URL` and `KAPI_SECRET_KEY`, plus `CONTROL_PLANE_PUBLIC_URL`, a unique `KAPI_PLANE_ID`, non-local `VM_PROVIDER`, and `DAYTONA_API_KEY` when the provider is Daytona |
+| Web build | `VITE_API_URL`, exactly matching `CONTROL_PLANE_PUBLIC_URL` |
+
+`KAPI_RATE_LIMIT_SALT` is optional when `KAPI_SESSION_SECRET` is strong, and
+`KAPI_DAYTONA_CENTS_PER_HOUR` is required for authoritative VM-cost reporting. The complete
+runtime/tuning contract, including defaults and release-probe variables, is in `.env.example`.
+Do not copy API-only OAuth or webhook credentials into the operations worker. Bootstrap values
+such as `KAPI_JOB_TOKEN` and `KAPI_JOB_ID` are minted and injected by the provisioner; operators
+must not configure them globally.
 
 ## Rollout and rollback
 

@@ -408,6 +408,9 @@ pnpm verify         # complete local gate; skips only real-Postgres contention w
 pnpm test:backend   # protocol, roles, control plane, operations, VM, LLM and agent-core
 pnpm test:queue     # real-Postgres contention, leases and event consistency
 pnpm test:ui        # deterministic web component states
+pnpm test:runtime   # compiled migration/API/worker lifecycle
+pnpm test:e2e       # real Chromium auth and project journeys (install Chromium first)
+pnpm audit:prod     # fail on high/critical production dependency advisories
 pnpm typecheck
 pnpm dev:api        # builds the agent bundle, then runs the plane in watch mode
 pnpm build:agent    # bundle apps/agent to a single dist/agent.mjs
@@ -439,8 +442,11 @@ fresh-clone and CI commands. Requires Node 22+ and pnpm 10.30.0.
 ## Release gates
 
 - Implemented and locally verified: control plane, adaptive roles, queue recovery,
-  setup/workbench UI, scheduling, accounting, reconciliation and CI baseline.
-- Next external gate: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence using
+  setup/workbench UI, scheduling, accounting, reconciliation, browser E2E, compiled runtime,
+  container build, dependency audit, and CodeQL gates.
+- Current deployment gap: deploy one current SHA to API/web, create the operations worker,
+  and move PostgreSQL to a protected non-expiring plan. See [RELEASE.md](./RELEASE.md).
+- Next integration gate: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence using
   `KAPI_SMOKE_REQUIRE_PRODUCTION=true pnpm test:smoke` after deployment.
 - Then: Render staging, controlled production canaries/restore, and final GA hardening.
 

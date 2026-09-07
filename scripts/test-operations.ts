@@ -60,6 +60,23 @@ await test("a complete production API configuration passes validation", () => {
   validateProductionConfig("api", productionApiEnv());
 });
 
+await test("in-process production operations require their provider and plane identity", async () => {
+  await throws(
+    () => validateProductionConfig("api", {
+      ...productionApiEnv(), KAPI_OPERATIONS: "on", VM_PROVIDER: "daytona",
+    }),
+    "in-process operations cannot omit plane or Daytona credentials",
+  );
+  validateProductionConfig("api", {
+    ...productionApiEnv(), KAPI_OPERATIONS: "on", VM_PROVIDER: "daytona",
+    KAPI_PLANE_ID: "api-production", DAYTONA_API_KEY: "daytona-test-key",
+  });
+  await throws(
+    () => validateProductionConfig("api", { ...productionApiEnv(), KAPI_OPERATIONS: "sometimes" }),
+    "an ambiguous operations mode is rejected",
+  );
+});
+
 await test("release preflight requires complete API integrations and exact public URLs", async () => {
   const complete: NodeJS.ProcessEnv = {
     ...productionApiEnv(),

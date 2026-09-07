@@ -7,11 +7,27 @@ only when every required item has an evidence link or dated operator note.
 ## Repository gates
 
 - [x] Changes are committed and pushed to `main`.
-- [x] The hosted `Release candidate` workflow passed for commit `41f8609`.
-- [x] PostgreSQL contention, fleet-budget races, UI checks, and production builds passed.
+- [x] Hosted `Release candidate` and CodeQL workflows passed for commit `e607614`; the release
+  SHA itself must also be green.
+- [x] PostgreSQL contention, fleet-budget races, deterministic UI checks, Chromium E2E,
+  compiled-runtime smoke checks, dependency audit, and production builds passed.
 - [x] Local health, readiness, and authenticated-metrics smoke checks passed.
 
 See [`VERIFICATION.md`](./VERIFICATION.md) for the recorded commands and counts.
+
+## Current deployment gaps
+
+- [ ] Render has deployed the current `main` SHA to both the API and static web service.
+- [ ] The `kapi-operations` worker exists and is running the same SHA as the API.
+- [ ] Migration 2 (`api_rate_limits`) has run through the compiled pre-deploy entrypoint.
+- [ ] Managed PostgreSQL is on a non-expiring production plan with restricted network access,
+  backups/point-in-time recovery, and an operator-tested restore path.
+- [ ] The Render account has billing enabled; the latest blueprint validation was blocked from
+  creating the database/worker by missing payment information.
+
+Observed before this hardening series: the live API reported commit `23a0968`, the web service
+reported commit `17be0ac`, and no operations worker was present. Treat those services as stale
+until the deployment checks above are recorded against one current SHA.
 
 ## Staging gates
 

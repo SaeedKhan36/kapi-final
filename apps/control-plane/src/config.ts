@@ -13,7 +13,12 @@ export function validateProductionConfig(
         "CONTROL_PLANE_PUBLIC_URL", "KAPI_WEB_URL", "WORKOS_CLIENT_ID", "WORKOS_API_KEY",
         "WORKOS_REDIRECT_URI", "KAPI_METRICS_TOKEN", "GITHUB_WEBHOOK_SECRET"]
     : ["DATABASE_URL", "KAPI_SECRET_KEY", "CONTROL_PLANE_PUBLIC_URL", "KAPI_PLANE_ID"];
-  if (role === "worker" && env.VM_PROVIDER === "daytona") required.push("DAYTONA_API_KEY");
+  if (role === "api" && env.KAPI_OPERATIONS && !["on", "off"].includes(env.KAPI_OPERATIONS)) {
+    throw new Error("KAPI_OPERATIONS must be on or off when set");
+  }
+  const runsOperations = role === "worker" || env.KAPI_OPERATIONS !== "off";
+  if (runsOperations && !required.includes("KAPI_PLANE_ID")) required.push("KAPI_PLANE_ID");
+  if (runsOperations && env.VM_PROVIDER === "daytona") required.push("DAYTONA_API_KEY");
   const missing = required.filter((key) => !env[key]?.trim());
   if (missing.length) throw new Error(`missing required production configuration: ${missing.join(", ")}`);
 
@@ -50,10 +55,11 @@ export function validateProductionConfig(
     if (appId !== appKey) {
       throw new Error("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be configured together");
     }
-  } else if (!/^[a-z0-9][a-z0-9_-]{2,63}$/i.test(env.KAPI_PLANE_ID!) || env.KAPI_PLANE_ID === "default") {
+  }
+  if (runsOperations &&
+      (!/^[a-z0-9][a-z0-9_-]{2,63}$/i.test(env.KAPI_PLANE_ID!) || env.KAPI_PLANE_ID === "default")) {
     throw new Error("KAPI_PLANE_ID must be a unique non-default deployment identifier");
   }
-  const runsOperations = role === "worker" || env.KAPI_OPERATIONS !== "off";
   if (runsOperations && (env.VM_PROVIDER ?? "local") === "local") {
     throw new Error("VM_PROVIDER=local is not allowed for production operations; use docker or daytona");
   }

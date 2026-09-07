@@ -40,9 +40,14 @@ pnpm test:backend    # protocol, roles, API, operations, VM, LLM and agent-core
 pnpm test:queue      # real-Postgres contention, leases and event consistency
 pnpm test:ui         # deterministic component states
 pnpm build:agent     # single-file VM agent bundle
+pnpm build:control-plane # compiled API, worker, and migration entrypoints
 pnpm build:web       # production Vite build
+pnpm test:runtime    # compiled migration/API/worker smoke checks
+pnpm exec playwright install chromium # one-time local browser install
+pnpm test:e2e        # Chromium auth boundary and project journey
+pnpm audit:prod      # production dependency vulnerability gate
 pnpm verify          # complete local release-candidate gate
 ```
 
-GitHub Actions runs the same categories against a disposable Postgres 16 service. Never
-point tests at a production database.
+GitHub Actions also builds the final Docker image, checks its non-root user, runs CodeQL, and
+runs browser tests against the production web bundle. Never point tests at a production database.
