@@ -14,6 +14,10 @@ checkout equivalent). API and worker startup call the connect/verify path: if th
 migration is missing they fail with an actionable readiness error instead of attempting DDL
 concurrently.
 
+Render does not execute pre-deploy commands on free web instances. A free-plan rehearsal must
+run the same compiled migration manually before deployment; production must use a paid instance
+so migrations remain an automatic, fail-closed rollout gate.
+
 Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
 `KAPI_ALLOWED_ORIGINS` to the final HTTPS service URLs. Configure the WorkOS callback as
 `$CONTROL_PLANE_PUBLIC_URL/auth/callback` and the GitHub webhook as

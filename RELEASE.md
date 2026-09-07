@@ -17,17 +17,20 @@ See [`VERIFICATION.md`](./VERIFICATION.md) for the recorded commands and counts.
 
 ## Current deployment gaps
 
-- [ ] Render has deployed the current `main` SHA to both the API and static web service.
+- [x] Render deployed hardened commit `d4de703` to both the API and static web service; the
+  release-evidence commit that records this deployment must be deployed next.
 - [ ] The `kapi-operations` worker exists and is running the same SHA as the API.
-- [ ] Migration 2 (`api_rate_limits`) has run through the compiled pre-deploy entrypoint.
+- [x] Migration 2 (`api_rate_limits`) is present in the Render database and API startup verified it.
 - [ ] Managed PostgreSQL is on a non-expiring production plan with restricted network access,
   backups/point-in-time recovery, and an operator-tested restore path.
 - [ ] The Render account has billing enabled; the latest blueprint validation was blocked from
   creating the database/worker by missing payment information.
 
-Observed before this hardening series: the live API reported commit `23a0968`, the web service
-reported commit `17be0ac`, and no operations worker was present. Treat those services as stale
-until the deployment checks above are recorded against one current SHA.
+Deployment evidence recorded on 2026-09-08: both services reported commit `d4de703`; `/live`,
+`/ready`, public/authenticated metrics behavior, WorkOS redirect, and the production web asset
+passed. The API reports `operations=external-worker`, so agent execution remains unavailable
+until the paid worker is created. Before this deployment, API `23a0968` and web `17be0ac` were
+the live revisions.
 
 ## Staging gates
 
