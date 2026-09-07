@@ -13,7 +13,7 @@
     "test:backend": "tsx scripts/test-protocol.ts && tsx scripts/test-roles.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
     "test:queue": "tsx scripts/test-queue.ts",
     "test:unit": "pnpm build:agent && pnpm test:backend && pnpm test:queue",
-    "verify": "pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:web",
+    "verify": "pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:control-plane && pnpm build:web",
     "test:operations": "tsx scripts/test-operations.ts",
     "test:smoke": "tsx scripts/smoke-production.ts",
     "audit:prod": "pnpm audit --prod --audit-level=high",
@@ -29,6 +29,7 @@
     "dev:api": "pnpm build:agent && pnpm --filter @kapi/control-plane dev",
     "dev:web": "pnpm --filter @kapi/web dev",
     "build:web": "pnpm --filter @kapi/web build",
+    "build:control-plane": "pnpm --filter @kapi/control-plane build",
     "build:agent": "pnpm --filter @kapi/agent build",
     "probe:daytona": "tsx scripts/probe-daytona.ts",
     "run:agent": "pnpm build:agent && tsx scripts/run-agent.ts"

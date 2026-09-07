@@ -5,9 +5,10 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
+    "build": "tsx ../../scripts/build-control-plane.ts",
     "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "start:worker": "tsx src/worker.ts"
+    "start": "node dist/api.mjs",
+    "start:worker": "node dist/worker.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

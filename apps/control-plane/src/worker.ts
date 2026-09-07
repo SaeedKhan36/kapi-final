@@ -15,8 +15,13 @@ console.log(`[worker] operations started (${operations.provisioner.providerName}
 
 let resolveShutdown!: () => void;
 const shutdownSignal = new Promise<void>((resolve) => { resolveShutdown = resolve; });
+// Operations timers are intentionally unref'd so they never delay shutdown.
+// Keep one referenced handle alive or Node exits with an unsettled top-level
+// await before a standalone worker can receive SIGTERM.
+const keepAlive = setInterval(() => {}, 24 * 60 * 60 * 1_000);
 process.once("SIGINT", resolveShutdown);
 process.once("SIGTERM", resolveShutdown);
 await shutdownSignal;
+clearInterval(keepAlive);
 await operations.stop();
 await handle.close();
