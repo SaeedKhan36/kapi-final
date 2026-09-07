@@ -68,7 +68,7 @@ await test("release preflight requires complete API integrations and exact publi
   };
   validateReleaseConfig("api", complete);
   validateReleaseConfig("worker", {
-    ...complete, VM_PROVIDER: "daytona", DAYTONA_API_KEY: "daytona-test-key",
+    ...complete, VM_PROVIDER: "daytona", DAYTONA_API_KEY: "daytona-test-key", KAPI_PLANE_ID: "test-plane",
   });
   validateReleaseConfig("web", {
     ...complete, VITE_API_URL: complete["CONTROL_PLANE_PUBLIC_URL"],
@@ -85,6 +85,18 @@ await test("release preflight requires complete API integrations and exact publi
   await throws(
     () => validateReleaseConfig("web", { ...complete, VITE_API_URL: "https://other.example.com" }),
     "web build must target the deployed API",
+  );
+  await throws(
+    () => validateReleaseConfig("worker", {
+      ...complete, VM_PROVIDER: "daytona", DAYTONA_API_KEY: "daytona-test-key",
+    }),
+    "release worker requires an explicit plane id",
+  );
+  await throws(
+    () => validateReleaseConfig("worker", {
+      ...complete, VM_PROVIDER: "daytona", DAYTONA_API_KEY: "daytona-test-key", KAPI_PLANE_ID: "default",
+    }),
+    "release worker rejects the shared default plane id",
   );
 });
 
@@ -273,16 +285,18 @@ await test("only labelled resources with KAPI ownership metadata are deleted", a
   const provider = new FakeProvider();
   provider.resources = [
     { id: "owned-orphan", provider: "fake", workdir: "/tmp", createdAt: 0, managed: true,
-      metadata: { jobId: "job_gone", runId: "run_gone" } },
+      metadata: { jobId: "job_gone", runId: "run_gone", planeId: "test-plane" } },
+    { id: "foreign-orphan", provider: "fake", workdir: "/tmp", createdAt: 0, managed: true,
+      metadata: { jobId: "job_foreign", runId: "run_foreign", planeId: "production-plane" } },
     { id: "unowned", provider: "fake", workdir: "/tmp", createdAt: 0, managed: true, metadata: {} },
   ];
-  const audit = new VmReconciler(handle, provider, 60_000, 0, true);
+  const audit = new VmReconciler(handle, provider, 60_000, 0, true, "test-plane");
   const preview = await audit.reconcile();
   equal(preview.orphaned, 1, "one owned orphan detected");
   equal(provider.destroyed.length, 0, "audit mode does not delete");
-  const active = new VmReconciler(handle, provider, 60_000, 0, false);
+  const active = new VmReconciler(handle, provider, 60_000, 0, false, "test-plane");
   await active.reconcile();
-  equal(provider.destroyed.join(","), "owned-orphan", "unowned resource protected");
+  equal(provider.destroyed.join(","), "owned-orphan", "unowned and foreign-plane resources protected");
 });
 
 await test("a provider-reported stopped VM releases its active agent row", async () => {
@@ -297,10 +311,10 @@ await test("a provider-reported stopped VM releases its active agent row", async
   provider.resources = [{
     id: "vm-stopped", provider: "fake", workdir: "/tmp", createdAt: Date.now(),
     managed: true, status: "stopped",
-    metadata: { jobId: started.job.id, runId: started.run.id },
+    metadata: { jobId: started.job.id, runId: started.run.id, planeId: "test-plane" },
   }];
 
-  const result = await new VmReconciler(handle, provider, 60_000, 0, true).reconcile();
+  const result = await new VmReconciler(handle, provider, 60_000, 0, true, "test-plane").reconcile();
   equal(result.missing, 1, "the stopped resource is treated as unavailable");
   const rows = await handle.raw<{ status: string; stopped_at: string | null }>(
     `SELECT status,stopped_at FROM agents WHERE job_id=$1`, [started.job.id],

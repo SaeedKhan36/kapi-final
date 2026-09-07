@@ -16,6 +16,7 @@ export class VmReconciler {
     private intervalMs = Number(process.env.KAPI_RECONCILE_INTERVAL_MS ?? 60_000),
     private graceMs = Number(process.env.KAPI_ORPHAN_GRACE_SECONDS ?? 600) * 1000,
     auditOnly = process.env.KAPI_RECONCILE_DELETE !== "true",
+    private planeId = process.env.KAPI_PLANE_ID ?? "default",
   ) { this.auditOnly = auditOnly; }
 
   start(): () => void {
@@ -33,15 +34,16 @@ export class VmReconciler {
     this.#busy = true;
     try {
       const resources = await this.provider.listManaged();
+      const owned = resources.filter((resource) => this.#isOwned(resource));
       const active = await this.handle.raw<{ job_id: string; run_id: string; vm_id: string }>(
         `SELECT job_id,run_id,vm_id FROM agents
          WHERE provider=$1 AND vm_id IS NOT NULL AND stopped_at IS NULL`, [this.provider.name],
       );
       const byId = new Map(active.map((a) => [a.vm_id, a]));
-      const found = new Map(resources.map((r) => [r.id, r]));
+      const found = new Map(owned.map((r) => [r.id, r]));
       let orphaned = 0, destroyed = 0;
-      for (const resource of resources) {
-        if (!this.#isOwned(resource) || byId.has(resource.id) || +now - resource.createdAt < this.graceMs) continue;
+      for (const resource of owned) {
+        if (byId.has(resource.id) || +now - resource.createdAt < this.graceMs) continue;
         orphaned++;
         log("warn", "vm.orphan_detected", { provider: this.provider.name, vmId: resource.id,
           auditOnly: this.auditOnly, jobId: resource.metadata?.jobId, runId: resource.metadata?.runId });
@@ -68,6 +70,7 @@ export class VmReconciler {
   }
 
   #isOwned(resource: ManagedVm): boolean {
-    return resource.managed === true && Boolean(resource.metadata?.jobId && resource.metadata?.runId);
+    return resource.managed === true && resource.metadata?.planeId === this.planeId &&
+      Boolean(resource.metadata?.jobId && resource.metadata?.runId);
   }
 }
