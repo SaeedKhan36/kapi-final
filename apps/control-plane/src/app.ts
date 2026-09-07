@@ -1,11 +1,12 @@
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { DbHandle } from "@kapi/db";
 import {
-  Authenticator, GitHubApp, WorkOSError, deleteSecret, listSecrets, parseRepoUrl, putSecret,
+  ACCESS_COOKIE, REFRESH_COOKIE, Authenticator, GitHubApp, WorkOSError,
+  deleteSecret, listSecrets, parseRepoUrl, putSecret,
   readAppConfig, vaultConfigured, type Principal, type SecretScope,
 } from "@kapi/identity";
 import { getJob, listJobs } from "@kapi/queue";
@@ -90,6 +91,23 @@ export function createApp(deps: {
   });
   app.use("/api/*", browserCors);
   app.use("/auth/*", browserCors);
+  const requireCookieOrigin = async (c: Context, next: Next) => {
+    if (process.env.NODE_ENV !== "production" || ["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
+      return next();
+    }
+    // Bearer callers authenticate explicitly and are not subject to ambient
+    // browser-cookie authority, so CSRF does not apply to them.
+    if (/^Bearer\s+\S+/i.test(c.req.header("authorization") ?? "")) return next();
+    const cookie = c.req.header("cookie") ?? "";
+    const carriesSession = [ACCESS_COOKIE, REFRESH_COOKIE].some((name) =>
+      new RegExp(`(?:^|;\\s*)${name}=`).test(cookie));
+    if (!carriesSession) return next();
+    const origin = c.req.header("origin");
+    if (!origin || !origins.includes(origin)) return c.json({ error: "origin not allowed" }, 403);
+    return next();
+  };
+  app.use("/api/*", requireCookieOrigin);
+  app.use("/auth/*", requireCookieOrigin);
   app.use("/api/*", async (c, next) => {
     const now = Date.now();
     const key = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";

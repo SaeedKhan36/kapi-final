@@ -133,6 +133,34 @@ await test("authenticated metrics expose release-critical queue and lifecycle si
   }
 });
 
+await test("production cookie mutations require an allowed browser origin", async () => {
+  const priorNodeEnv = process.env.NODE_ENV;
+  const priorOrigins = process.env.KAPI_ALLOWED_ORIGINS;
+  try {
+    process.env.NODE_ENV = "production";
+    process.env.KAPI_ALLOWED_ORIGINS = "https://app.example.com";
+    const protectedApp = createApp({ handle, store, hub, auth, githubApp: null });
+    const request = (origin?: string, authorization?: string) => protectedApp.request("/auth/logout", {
+      method: "POST",
+      headers: {
+        cookie: "kapi_access=test-session",
+        ...(origin ? { origin } : {}),
+        ...(authorization ? { authorization } : {}),
+      },
+    });
+
+    equal((await request()).status, 403, "missing origin is rejected");
+    equal((await request("https://attacker.example")).status, 403, "cross-site origin is rejected");
+    equal((await request("https://app.example.com")).status, 204, "configured web origin is accepted");
+    equal((await request(undefined, "Bearer api-token")).status, 204, "explicit bearer authority is accepted");
+  } finally {
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
+    if (priorOrigins === undefined) delete process.env.KAPI_ALLOWED_ORIGINS;
+    else process.env.KAPI_ALLOWED_ORIGINS = priorOrigins;
+  }
+});
+
 /* ------------------------------------------------------------------ */
 
 group("projects and threads");
