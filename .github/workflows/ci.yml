@@ -48,6 +48,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Production dependency audit
+        run: pnpm audit:prod
       - name: Apply migrations as the schema writer
         run: NODE_ENV=production pnpm db:migrate
       - name: Typecheck
