@@ -10,6 +10,7 @@ import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Store, type EventRow } from "../apps/control-plane/src/store.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { attachWebSocket } from "../apps/control-plane/src/ws.ts";
+import { RateLimiter, clientAddress } from "../apps/control-plane/src/rate-limiter.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
 import { createTestDb, useHermeticTestConfig } from "./test-db.ts";
 
@@ -159,6 +160,22 @@ await test("production cookie mutations require an allowed browser origin", asyn
     if (priorOrigins === undefined) delete process.env.KAPI_ALLOWED_ORIGINS;
     else process.env.KAPI_ALLOWED_ORIGINS = priorOrigins;
   }
+});
+
+await test("rate limiting is shared across instances and ignores spoofed proxy prefixes", async () => {
+  const headers = (value: string) => ({ get: (name: string) =>
+    name.toLowerCase() === "x-forwarded-for" ? value : undefined });
+  equal(clientAddress(headers("203.0.113.10, 198.51.100.7")), "198.51.100.7", "the trusted final hop wins");
+  equal(clientAddress(headers("spoofed-value")), "unknown", "invalid addresses share the safe fallback bucket");
+
+  const first = new RateLimiter(handle, { limit: 2, windowMs: 60_000, salt: "shared-test" });
+  const second = new RateLimiter(handle, { limit: 2, windowMs: 60_000, salt: "shared-test" });
+  const now = new Date("2040-01-01T00:00:00.000Z");
+  assert((await first.consume("198.51.100.7", now)).allowed, "first request allowed");
+  assert((await second.consume("198.51.100.7", now)).allowed, "second replica shares the bucket");
+  assert(!(await first.consume("198.51.100.7", now)).allowed, "shared limit is enforced");
+  assert((await second.consume("203.0.113.11", now)).allowed, "another address has its own bucket");
+  assert((await first.consume("198.51.100.7", new Date(+now + 60_000))).allowed, "a new window resets the bucket");
 });
 
 /* ------------------------------------------------------------------ */

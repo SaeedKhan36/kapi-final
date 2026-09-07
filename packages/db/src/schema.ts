@@ -1,5 +1,5 @@
 import {
-  pgTable, text, timestamp, integer, bigint, boolean, jsonb, index, uniqueIndex,
+  pgTable, text, timestamp, integer, bigint, boolean, jsonb, index, uniqueIndex, primaryKey,
 } from "drizzle-orm/pg-core";
 import type { JobPayload, JobResult, ReviewVerdict } from "@kapi/protocol";
 
@@ -15,6 +15,19 @@ export const users = pgTable("users", {
   name: text("name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const apiRateLimits = pgTable(
+  "api_rate_limits",
+  {
+    subjectHash: text("subject_hash").notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    count: integer("count").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.subjectHash, t.bucketStart] }),
+    index("api_rate_limits_bucket_idx").on(t.bucketStart),
+  ],
+);
 
 export const projects = pgTable(
   "projects",

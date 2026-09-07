@@ -22,6 +22,7 @@ import { createWebAuthRoutes } from "./web-auth.ts";
 import { allowedOrigins } from "./config.ts";
 import { log } from "./log.ts";
 import type { RequestTracker } from "./request-tracker.ts";
+import { RateLimiter, clientAddress } from "./rate-limiter.ts";
 
 type Env = { Variables: { principal: Principal } };
 
@@ -76,7 +77,7 @@ export function createApp(deps: {
   const githubApp = deps.githubApp === undefined
     ? (githubConfig ? new GitHubApp(githubConfig) : null)
     : deps.githubApp;
-  const rate = new Map<string, { at: number; count: number }>();
+  const rate = new RateLimiter(handle);
 
   app.use("*", async (_c, next) => {
     const leave = deps.requests?.enter();
@@ -109,12 +110,11 @@ export function createApp(deps: {
   app.use("/api/*", requireCookieOrigin);
   app.use("/auth/*", requireCookieOrigin);
   app.use("/api/*", async (c, next) => {
-    const now = Date.now();
-    const key = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
-    const current = rate.get(key);
-    const window = !current || now - current.at >= 60_000 ? { at: now, count: 0 } : current;
-    window.count++; rate.set(key, window);
-    if (window.count > Number(process.env.KAPI_RATE_LIMIT_PER_MINUTE ?? 300)) {
+    const decision = await rate.consume(clientAddress({ get: (name) => c.req.header(name) }));
+    c.header("ratelimit-limit", String(decision.limit));
+    c.header("ratelimit-remaining", String(decision.remaining));
+    c.header("ratelimit-reset", String(Math.ceil(+decision.resetAt / 1000)));
+    if (!decision.allowed) {
       return c.json({ error: "rate limit exceeded" }, 429);
     }
     const requestId = c.req.header("x-request-id") ?? crypto.randomUUID();

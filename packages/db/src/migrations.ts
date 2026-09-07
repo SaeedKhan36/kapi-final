@@ -60,6 +60,19 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS usage_ledger_run_idx ON usage_ledger (run_id, created_at);
     `,
   },
+  {
+    version: 2,
+    name: "shared-api-rate-limits",
+    sql: `
+      CREATE TABLE IF NOT EXISTS api_rate_limits (
+        subject_hash TEXT NOT NULL,
+        bucket_start TIMESTAMPTZ NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (subject_hash, bucket_start)
+      );
+      CREATE INDEX IF NOT EXISTS api_rate_limits_bucket_idx ON api_rate_limits (bucket_start);
+    `,
+  },
 ];
 
 export async function runMigrations(handle: DbHandle): Promise<void> {

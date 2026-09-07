@@ -202,10 +202,18 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
 CREATE UNIQUE INDEX IF NOT EXISTS usage_ledger_job_period_idx
   ON usage_ledger (job_id, kind, period_end);
 CREATE INDEX IF NOT EXISTS usage_ledger_run_idx ON usage_ledger (run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS api_rate_limits (
+  subject_hash TEXT NOT NULL,
+  bucket_start TIMESTAMPTZ NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY (subject_hash, bucket_start)
+);
+CREATE INDEX IF NOT EXISTS api_rate_limits_bucket_idx ON api_rate_limits (bucket_start);
 `;
 
 /** Every table, in dependency order for TRUNCATE. */
 export const TABLES = [
   "events", "artifacts", "usage_ledger", "agents", "jobs", "runs", "messages", "threads",
-  "schedules", "projects", "connections", "secrets", "users",
+  "schedules", "projects", "connections", "secrets", "api_rate_limits", "users",
 ] as const;
