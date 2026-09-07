@@ -7,7 +7,7 @@ import { Authenticator, mintJobToken } from "@kapi/identity";
 import { claim, complete, enqueue, getJob, reap } from "@kapi/queue";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
-import { Store } from "../apps/control-plane/src/store.ts";
+import { Store, type EventRow } from "../apps/control-plane/src/store.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { attachWebSocket } from "../apps/control-plane/src/ws.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
@@ -357,6 +357,57 @@ await test("a socket cannot subscribe to a run it does not own or that does not 
     socket.onclose = () => resolve(false);
   });
   equal(opened, false, "upgrade rejected before replay");
+});
+
+await test("event replay paginates beyond one thousand rows", async () => {
+  const run = "run_large_replay";
+  const events: EventRow[] = Array.from({ length: 1_205 }, (_, index) => ({
+    id: `evt_${index + 1}`, runId: run, jobId: null, seq: index + 1,
+    kind: "agent.message", from: "captain", to: null, payload: {}, ts: new Date(),
+  }));
+  const replayStore = {
+    listEvents: async (_runId: string, after = 0, limit = 1000) =>
+      events.filter((event) => event.seq > after).slice(0, limit),
+  } as unknown as Store;
+  const replayHub = new EventHub(replayStore, {} as typeof handle, 60_000);
+  const frames: Array<Record<string, unknown>> = [];
+  const client = { id: "large-replay", runId: run, send: (data: string) => frames.push(JSON.parse(data)) };
+  const remove = replayHub.add(client);
+  const cursor = await replayHub.replay(client, run, 0);
+  equal(cursor, 1_205, "the complete history advances the client cursor");
+  equal(frames.filter((frame) => frame.kind === "event").length, 1_205, "every page is delivered");
+  remove();
+  await replayHub.close();
+});
+
+await test("client cursors cannot poison delivery and out-of-order publishes wait for gaps", async () => {
+  const run = "run_cursor_isolation";
+  const emptyStore = { listEvents: async () => [] } as unknown as Store;
+  const isolated = new EventHub(emptyStore, {} as typeof handle, 60_000);
+  const received: number[] = [];
+  const normal = {
+    id: "normal-cursor", runId: run,
+    send: (data: string) => {
+      const frame = JSON.parse(data) as { kind: string; event?: EventRow };
+      if (frame.kind === "event") received.push(frame.event!.seq);
+    },
+  };
+  const poison = { id: "high-cursor", runId: run, send: (_data: string) => {} };
+  const removeNormal = isolated.add(normal);
+  const removePoison = isolated.add(poison);
+  await isolated.replay(normal, run, 0);
+  await isolated.replay(poison, run, 1_000_000);
+
+  const event = (seq: number): EventRow => ({
+    id: `evt_order_${seq}`, runId: run, jobId: null, seq,
+    kind: "agent.message", from: "captain", to: null, payload: {}, ts: new Date(),
+  });
+  isolated.publish(event(2));
+  isolated.publish(event(1));
+  equal(received.join(","), "1,2", "the normal client receives contiguous ordered events");
+
+  removeNormal(); removePoison();
+  await isolated.close();
 });
 
 /* ------------------------------------------------------------------ */
