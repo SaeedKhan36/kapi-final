@@ -9,6 +9,7 @@ import { UsageAccounting } from "../apps/control-plane/src/accounting.ts";
 import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { validateProductionConfig, validateReleaseConfig } from "../apps/control-plane/src/config.ts";
+import { applyLocalDevelopmentDefaults } from "../apps/control-plane/src/local-dev.ts";
 import { evaluateLifecycle } from "./staging-evidence.ts";
 import { RESTORE_TABLES, compareRestoreCounts, parseExpectedCounts } from "./restore-evidence.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
@@ -39,6 +40,26 @@ await test("whole-database truncation requires an explicit external opt-in", asy
 });
 
 group("production configuration");
+
+await test("one-command development defaults stay local and preserve shell overrides", () => {
+  const defaults: NodeJS.ProcessEnv = {};
+  applyLocalDevelopmentDefaults(defaults);
+  equal(defaults.NODE_ENV, "development", "development mode is explicit");
+  equal(defaults.DATABASE_URL, "", "the embedded database wins over a repository .env");
+  equal(defaults.KAPI_OPERATIONS, "on", "operations run with the local API");
+  equal(defaults.VM_PROVIDER, "local", "agents use local subprocesses");
+  equal(defaults.WORKOS_API_KEY, "", "hosted authentication is disabled locally");
+
+  const explicit: NodeJS.ProcessEnv = {
+    DATABASE_URL: "postgres://explicit.invalid/kapi",
+    KAPI_OPERATIONS: "off",
+    VM_PROVIDER: "daytona",
+  };
+  applyLocalDevelopmentDefaults(explicit);
+  equal(explicit.DATABASE_URL, "postgres://explicit.invalid/kapi", "an exported database wins");
+  equal(explicit.KAPI_OPERATIONS, "off", "an exported operations mode wins");
+  equal(explicit.VM_PROVIDER, "daytona", "an exported provider wins");
+});
 
 const productionApiEnv = (): NodeJS.ProcessEnv => ({
   NODE_ENV: "production",
