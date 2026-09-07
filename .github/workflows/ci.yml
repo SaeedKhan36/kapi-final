@@ -56,6 +56,8 @@ jobs:
         run: pnpm typecheck
       - name: Agent build
         run: pnpm build:agent
+      - name: Control-plane production build
+        run: pnpm build:control-plane
       - name: Backend tests
         run: pnpm test:backend
       - name: Queue concurrency
@@ -64,3 +66,31 @@ jobs:
         run: pnpm build:web
       - name: Deterministic UI tests
         run: pnpm test:ui
+      - name: Compiled runtime smoke tests
+        run: pnpm test:runtime
+      - name: Production container build
+        run: docker build --tag kapi:${{ github.sha }} .
+      - name: Verify non-root runtime image
+        run: test "$(docker image inspect kapi:${{ github.sha }} --format '{{.Config.User}}')" = "kapi"
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.0
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Browser end-to-end tests
+        run: pnpm test:e2e

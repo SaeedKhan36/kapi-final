@@ -9,3 +9,5 @@ dist/
 .output/
 .tanstack/
 apps/web/dist/
+playwright-report/
+test-results/
