@@ -17,6 +17,30 @@ use embedded PGlite. The queue suite skips only its labelled contention cases be
 PGlite serializes transactions and cannot prove `FOR UPDATE SKIP LOCKED` behavior. GitHub CI
 always runs those cases against PostgreSQL 16.
 
+## One-command local stack
+
+```bash
+pnpm dev
+```
+
+Turborepo first builds the VM agent bundle, then keeps the control plane and Vite UI running
+together at `http://localhost:8787` and `http://localhost:3000`. The control plane also runs
+the scheduler, provisioner, reaper, accounting, and reconciler in-process. A queued Captain
+or child job is provisioned as a local subprocess in its own temporary worktree; no standalone
+operations process is needed.
+
+The local launcher supplies safe defaults before `.env` is loaded: development mode, embedded
+PGlite, dev authentication, `KAPI_OPERATIONS=on`, and `VM_PROVIDER=local`. This prevents an
+ignored `.env` used for deployment administration from accidentally connecting `pnpm dev` to
+a production database or Daytona account. Explicit shell values still win, for example:
+
+```bash
+DATABASE_URL=postgres://postgres:kapi@127.0.0.1:5432/kapi \
+VM_PROVIDER=docker pnpm dev
+```
+
+`pnpm dev:api` and `pnpm dev:web` remain available when only one side is needed.
+
 For a disposable local database:
 
 ```bash
@@ -36,6 +60,7 @@ database.
 
 ```bash
 pnpm typecheck       # all TypeScript packages and the web app
+pnpm build           # Turbo build for the agent, API/worker/migration, and web
 pnpm test:backend    # protocol, roles, API, operations, VM, LLM and agent-core
 pnpm test:queue      # real-Postgres contention, leases and event consistency
 pnpm test:ui         # deterministic component states

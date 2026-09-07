@@ -90,12 +90,17 @@ worker that already guessed.
 pnpm install
 cp .env.example .env
 openssl rand -base64 32        # put this in KAPI_SECRET_KEY
-pnpm dev:api                   # control plane on :8787
-pnpm dev:web                   # browser UI on :3000, proxied to the plane
+pnpm dev                       # agent bundle + API :8787 + web :3000
 ```
 
-With `DATABASE_URL` unset everything runs on embedded PGlite — real Postgres compiled to
-WASM, no account, no container, no network.
+Like the Hauspet workspace, the root command uses Turborepo to build prerequisites and run
+every persistent development service together. Kapi's development entrypoint defaults to
+embedded PGlite, unauthenticated local-user mode, in-process operations, and local subprocess
+agents even if `.env` contains production deployment values. An environment value exported
+by the invoking shell takes precedence when you intentionally want a different local setup.
+
+The default therefore needs no database account, container, cloud VM, or separate operations
+worker. Stop the complete stack with one `Ctrl+C`.
 
 ```bash
 curl localhost:8787/api/health
@@ -412,7 +417,10 @@ pnpm test:runtime   # compiled migration/API/worker lifecycle
 pnpm test:e2e       # real Chromium auth and project journeys (install Chromium first)
 pnpm audit:prod     # fail on high/critical production dependency advisories
 pnpm typecheck
+pnpm dev            # Turbo: agent bundle, local API/operations, and web UI
 pnpm dev:api        # builds the agent bundle, then runs the plane in watch mode
+pnpm dev:web        # run only the browser UI
+pnpm build          # Turbo production builds for every buildable workspace
 pnpm build:agent    # bundle apps/agent to a single dist/agent.mjs
 pnpm probe:daytona  # create one real Daytona VM, exercise it, destroy it
 pnpm db:reset       # wipe every table (--force required against real Postgres)
