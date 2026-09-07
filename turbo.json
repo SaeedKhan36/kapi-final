@@ -1,0 +1,30 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  "globalPassThroughEnv": [
+    "CI",
+    "NODE_ENV",
+    "PORT",
+    "DATABASE_URL",
+    "KAPI_*",
+    "CONTROL_PLANE_*",
+    "VM_*",
+    "DAYTONA_*",
+    "WORKOS_*",
+    "GITHUB_*",
+    "GIT_AUTHOR_*",
+    "VITE_*"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": ["dist/**"]
+    },
+    "dev": {
+      "dependsOn": ["@kapi/agent#build"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

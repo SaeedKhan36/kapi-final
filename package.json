@@ -8,6 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev": "turbo dev --filter=@kapi/control-plane --filter=@kapi/web",
+    "build": "turbo build",
     "typecheck": "tsc --noEmit && pnpm --filter @kapi/web typecheck",
     "test:ui": "pnpm --filter @kapi/web test",
     "test:e2e": "playwright test",
@@ -53,6 +55,7 @@
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.24.2",
     "tsx": "^4.19.2",
+    "turbo": "^2.6.3",
     "typescript": "^5.7.2",
     "zod": "^3.24.1"
   }

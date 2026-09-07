@@ -6,7 +6,7 @@
   "main": "./src/index.ts",
   "scripts": {
     "build": "tsx ../../scripts/build-control-plane.ts",
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/dev.ts",
     "start": "node dist/api.mjs",
     "start:worker": "node dist/worker.mjs"
   },
