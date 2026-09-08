@@ -16,7 +16,8 @@
     "test:backend": "tsx scripts/test-protocol.ts && tsx scripts/test-roles.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts",
     "test:queue": "tsx scripts/test-queue.ts",
     "test:unit": "pnpm build:agent && pnpm test:backend && pnpm test:queue",
-    "verify": "pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:control-plane && pnpm build:web",
+    "verify": "pnpm test:deployment && pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:control-plane && pnpm build:web",
+    "test:deployment": "tsx scripts/test-digitalocean-spec.ts",
     "test:operations": "tsx scripts/test-operations.ts",
     "test:smoke": "tsx scripts/smoke-production.ts",
     "test:runtime": "pnpm build:agent && pnpm build:control-plane && tsx scripts/test-runtime.ts",
@@ -57,6 +58,7 @@
     "tsx": "^4.19.2",
     "turbo": "^2.6.3",
     "typescript": "^5.7.2",
+    "yaml": "^2.9.0",
     "zod": "^3.24.1"
   }
 }
