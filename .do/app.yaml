@@ -1,3 +1,5 @@
+# Replace every CHANGE_ME value in DigitalOcean's encrypted environment editor
+# before the first deployment. Never commit real credentials to this file.
 name: kapi
 region: sgp
 
@@ -43,9 +45,11 @@ services:
       - key: KAPI_SECRET_KEY
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_SHARED_32_BYTE_BASE64_KEY
       - key: KAPI_SESSION_SECRET
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_SESSION_SECRET
       - key: KAPI_ALLOWED_ORIGINS
         scope: RUN_TIME
         value: ${APP_URL}
@@ -58,24 +62,30 @@ services:
       - key: WORKOS_CLIENT_ID
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_WORKOS_CLIENT_ID
       - key: WORKOS_API_KEY
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_WORKOS_API_KEY
       - key: WORKOS_REDIRECT_URI
         scope: RUN_TIME
         value: ${APP_URL}/auth/callback
       - key: GITHUB_APP_ID
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_GITHUB_APP_ID
       - key: GITHUB_APP_PRIVATE_KEY
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_GITHUB_APP_PRIVATE_KEY
       - key: GITHUB_WEBHOOK_SECRET
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_GITHUB_WEBHOOK_SECRET
       - key: KAPI_METRICS_TOKEN
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_METRICS_TOKEN
 
 workers:
   - name: operations
@@ -100,6 +110,7 @@ workers:
       - key: KAPI_SECRET_KEY
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_SHARED_32_BYTE_BASE64_KEY
       - key: CONTROL_PLANE_PUBLIC_URL
         scope: RUN_TIME
         value: ${APP_URL}
@@ -112,6 +123,7 @@ workers:
       - key: DAYTONA_API_KEY
         scope: RUN_TIME
         type: SECRET
+        value: CHANGE_ME_DAYTONA_API_KEY
       - key: KAPI_PROVISIONER
         scope: RUN_TIME
         value: "on"

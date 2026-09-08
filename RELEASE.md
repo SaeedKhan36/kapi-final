@@ -7,7 +7,7 @@ only when every required item has an evidence link or dated operator note.
 ## Repository gates
 
 - [x] Changes are committed and pushed to `main`.
-- [x] Hosted `Release candidate` and CodeQL workflows passed for commit `e607614`; the release
+- [x] Hosted `Release candidate` and CodeQL workflows passed for commit `38e10fa`; the release
   SHA itself must also be green.
 - [x] PostgreSQL contention, fleet-budget races, deterministic UI checks, Chromium E2E,
   compiled-runtime smoke checks, dependency audit, and production builds passed.
@@ -17,20 +17,19 @@ See [`VERIFICATION.md`](./VERIFICATION.md) for the recorded commands and counts.
 
 ## Current deployment gaps
 
-- [x] Render deployed hardened commit `d4de703` to both the API and static web service; the
-  release-evidence commit that records this deployment must be deployed next.
-- [ ] The `kapi-operations` worker exists and is running the same SHA as the API.
-- [x] Migration 2 (`api_rate_limits`) is present in the Render database and API startup verified it.
-- [ ] Managed PostgreSQL is on a non-expiring production plan with restricted network access,
-  backups/point-in-time recovery, and an operator-tested restore path.
-- [ ] The Render account has billing enabled; the latest blueprint validation was blocked from
-  creating the database/worker by missing payment information.
+- [x] The DigitalOcean App Platform topology is committed in `.do/app.yaml`.
+- [ ] Student credit and account verification are active.
+- [ ] A production DigitalOcean Managed PostgreSQL cluster named `kapi-postgres` exists in the
+  app region, is bound through its private URL, and has the app as a trusted source.
+- [ ] Every `CHANGE_ME` placeholder is replaced through DigitalOcean's encrypted environment
+  editor; the API and worker share the same `KAPI_SECRET_KEY`.
+- [ ] The DigitalOcean app is created and its API, operations worker, migration job, and web
+  components are running the same current SHA.
+- [ ] Backups/point-in-time recovery, alert destinations, metrics scraping, and an
+  operator-tested isolated restore are configured.
 
-Deployment evidence recorded on 2026-09-08: both services reported commit `d4de703`; `/live`,
-`/ready`, public/authenticated metrics behavior, WorkOS redirect, and the production web asset
-passed. The API reports `operations=external-worker`, so agent execution remains unavailable
-until the paid worker is created. Before this deployment, API `23a0968` and web `17be0ac` were
-the live revisions.
+No DigitalOcean resources have been created yet. Follow [`DIGITALOCEAN.md`](./DIGITALOCEAN.md)
+after the student credit is active.
 
 ## Staging gates
 

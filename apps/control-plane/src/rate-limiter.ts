@@ -11,8 +11,8 @@ const positiveInt = (value: string | undefined, fallback: number) => {
  * Resolve the address written by the platform's final trusted proxy.
  *
  * Taking the last valid X-Forwarded-For entry prevents a caller from choosing
- * an arbitrary bucket by prepending a spoofed address. Render terminates public
- * traffic before forwarding it to the service; a missing/invalid header shares
+ * an arbitrary bucket by prepending a spoofed address. App Platform terminates
+ * public traffic before forwarding it to the service; a missing/invalid header shares
  * the conservative "unknown" bucket instead of bypassing the limiter.
  */
 export function clientAddress(headers: { get(name: string): string | undefined }): string {

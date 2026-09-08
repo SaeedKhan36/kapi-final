@@ -41,7 +41,7 @@ Browser ──REST/WS──> API ──SQL/NOTIFY──> Postgres
 
 ## Deployment boundary
 
-Production API and worker processes only connect and verify migration state. Render's
-pre-deploy command is the only production schema writer. Runtime work is split so the API
-serves traffic while one operations worker owns scheduled/background loops. Run-row locks
+Production API and worker processes only connect and verify migration state. DigitalOcean App
+Platform's pre-deploy job is the only production schema writer. Runtime work is split so the
+API serves traffic while one operations worker owns scheduled/background loops. Run-row locks
 make total-spawn and concurrent-VM limits authoritative even during rolling worker overlap.

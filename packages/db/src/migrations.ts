@@ -5,7 +5,7 @@ type Migration = { version: number; name: string; sql: string };
 /**
  * Small, versioned SQL migrations for deployed databases. DDL remains the
  * zero-setup test/bootstrap path; migrations are what safely advance an
- * existing Render database whose CREATE TABLE statements are already no-ops.
+ * an existing production database whose CREATE TABLE statements are already no-ops.
  */
 export const MIGRATIONS: readonly Migration[] = [
   {

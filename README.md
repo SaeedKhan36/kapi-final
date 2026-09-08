@@ -452,10 +452,12 @@ fresh-clone and CI commands. Requires Node 22+ and pnpm 10.30.0.
 - Implemented and locally verified: control plane, adaptive roles, queue recovery,
   setup/workbench UI, scheduling, accounting, reconciliation, browser E2E, compiled runtime,
   container build, dependency audit, and CodeQL gates.
-- Current deployment gap: deploy one current SHA to API/web, create the operations worker,
-  and move PostgreSQL to a protected non-expiring plan. See [RELEASE.md](./RELEASE.md).
+- DigitalOcean deployment topology is ready in [`.do/app.yaml`](./.do/app.yaml). Creating the
+  app, loading encrypted secrets, provisioning managed PostgreSQL, and recording live lifecycle
+  evidence remain operator steps. See [DIGITALOCEAN.md](./DIGITALOCEAN.md) and
+  [RELEASE.md](./RELEASE.md).
 - Next integration gate: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence using
   `KAPI_SMOKE_REQUIRE_PRODUCTION=true pnpm test:smoke` after deployment.
-- Then: Render staging, controlled production canaries/restore, and final GA hardening.
+- Then: DigitalOcean staging, controlled production canaries/restore, and final GA hardening.
 
 A run ends at an open pull request. **Merging is always a human decision.**

@@ -1,27 +1,27 @@
 # Production operations
 
-## Render topology
+## DigitalOcean topology
 
-`render.yaml` creates managed Postgres, a public API service, a private operations worker,
-and the static React UI. The API runs with `KAPI_OPERATIONS=off`; only the worker schedules,
+`.do/app.yaml` defines a DigitalOcean App Platform app backed by an existing production
+DigitalOcean Managed PostgreSQL cluster. It contains a public API service, a private operations
+worker, a pre-deploy migration job, and the static React UI. The API runs with
+`KAPI_OPERATIONS=off`; only the worker schedules,
 reaps, meters, reconciles, and provisions. Queue and scheduler claims are database-locked,
 and spawn/VM budgets use the run row as a cross-replica mutex, so a temporary second worker
 remains safe during a rolling deploy.
 
-The compiled `node apps/control-plane/dist/migrate.mjs` entrypoint runs as Render's API
-`preDeployCommand` and is the only production schema writer (`pnpm db:migrate` is the source
-checkout equivalent). API and worker startup call the connect/verify path: if the pre-deploy
-migration is missing they fail with an actionable readiness error instead of attempting DDL
-concurrently.
-
-Render does not execute pre-deploy commands on free web instances. A free-plan rehearsal must
-run the same compiled migration manually before deployment; production must use a paid instance
-so migrations remain an automatic, fail-closed rollout gate.
+The compiled `node apps/control-plane/dist/migrate.mjs` entrypoint runs as App Platform's
+`PRE_DEPLOY` job and is the only production schema writer (`pnpm db:migrate` is the source
+checkout equivalent). API and worker startup call the connect/verify path: if the migration is
+missing they fail with an actionable readiness error instead of attempting DDL concurrently.
 
 Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
 `KAPI_ALLOWED_ORIGINS` to the final HTTPS service URLs. Configure the WorkOS callback as
 `$CONTROL_PLANE_PUBLIC_URL/auth/callback` and the GitHub webhook as
 `$CONTROL_PLANE_PUBLIC_URL/webhooks/github`.
+
+The exact account setup, secret ownership, creation command, and safe first rollout are in
+[`DIGITALOCEAN.md`](./DIGITALOCEAN.md).
 
 Before starting each service, load that service's production environment and run its strict
 release preflight. This validates configuration without printing secret values:
@@ -90,7 +90,7 @@ window.
 
 ## Backup and restore
 
-Enable Render Postgres point-in-time recovery and take an on-demand backup before each
+Enable DigitalOcean Managed PostgreSQL point-in-time recovery and take an on-demand backup before each
 migration. Quarterly, restore the newest backup into a separate database, run
 `pnpm db:migrate`, then verify project/thread/run counts and a read-only `/ready` smoke test.
 Record the restore duration and any missing secrets; encrypted connection records require
@@ -119,8 +119,8 @@ KAPI_SECRET_KEY=... pnpm release:verify-restore
 - Rotate `KAPI_SESSION_SECRET` by forcing all sessions to sign in again.
 - Rotate `KAPI_SECRET_KEY` only with an envelope re-encryption procedure; changing it alone
   makes stored secrets and Codex grants unreadable.
-- Rotate the GitHub webhook secret in GitHub and Render in the same maintenance window.
-- Rotate WorkOS and Daytona credentials in their provider consoles, update Render, and
+- Rotate the GitHub webhook secret in GitHub and DigitalOcean in the same maintenance window.
+- Rotate WorkOS and Daytona credentials in their provider consoles, update DigitalOcean, and
   restart both services.
 
 ## Alerts
