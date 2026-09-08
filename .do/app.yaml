@@ -1,0 +1,225 @@
+name: kapi
+region: sgp
+
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+
+services:
+  - name: api
+    github:
+      repo: SaeedKhan36/kapi-final
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: Dockerfile
+    run_command: node apps/control-plane/dist/api.mjs
+    http_port: 8787
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /ready
+      initial_delay_seconds: 20
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 6
+    termination:
+      drain_seconds: 30
+      grace_period_seconds: 120
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+      - key: PORT
+        scope: RUN_TIME
+        value: "8787"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${kapi-db.DATABASE_PRIVATE_URL}
+      - key: KAPI_OPERATIONS
+        scope: RUN_TIME
+        value: "off"
+      - key: KAPI_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAPI_SESSION_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAPI_ALLOWED_ORIGINS
+        scope: RUN_TIME
+        value: ${APP_URL}
+      - key: KAPI_WEB_URL
+        scope: RUN_TIME
+        value: ${APP_URL}
+      - key: CONTROL_PLANE_PUBLIC_URL
+        scope: RUN_TIME
+        value: ${APP_URL}
+      - key: WORKOS_CLIENT_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: WORKOS_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: WORKOS_REDIRECT_URI
+        scope: RUN_TIME
+        value: ${APP_URL}/auth/callback
+      - key: GITHUB_APP_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: GITHUB_APP_PRIVATE_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: GITHUB_WEBHOOK_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAPI_METRICS_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+
+workers:
+  - name: operations
+    github:
+      repo: SaeedKhan36/kapi-final
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: Dockerfile
+    run_command: node apps/control-plane/dist/worker.mjs
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    termination:
+      grace_period_seconds: 120
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${kapi-db.DATABASE_PRIVATE_URL}
+      - key: KAPI_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: CONTROL_PLANE_PUBLIC_URL
+        scope: RUN_TIME
+        value: ${APP_URL}
+      - key: KAPI_PLANE_ID
+        scope: RUN_TIME
+        value: kapi-production
+      - key: VM_PROVIDER
+        scope: RUN_TIME
+        value: daytona
+      - key: DAYTONA_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: KAPI_PROVISIONER
+        scope: RUN_TIME
+        value: "on"
+      - key: KAPI_RECONCILER
+        scope: RUN_TIME
+        value: "on"
+      - key: KAPI_SCHEDULER
+        scope: RUN_TIME
+        value: "off"
+      - key: KAPI_RECONCILE_DELETE
+        scope: RUN_TIME
+        value: "false"
+      - key: KAPI_DAYTONA_CENTS_PER_HOUR
+        scope: RUN_TIME
+        value: "0"
+
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: SaeedKhan36/kapi-final
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: Dockerfile
+    run_command: node apps/control-plane/dist/migrate.mjs
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${kapi-db.DATABASE_PRIVATE_URL}
+
+static_sites:
+  - name: web
+    github:
+      repo: SaeedKhan36/kapi-final
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    environment_slug: node-js
+    build_command: corepack enable && pnpm install --frozen-lockfile && pnpm build:web
+    output_dir: apps/web/dist
+    catchall_document: index.html
+    envs:
+      - key: VITE_API_URL
+        scope: BUILD_TIME
+        value: ${APP_URL}
+
+databases:
+  - name: kapi-db
+    engine: PG
+    version: "18"
+    production: true
+    cluster_name: kapi-postgres
+    db_name: kapi
+    db_user: kapi
+
+ingress:
+  rules:
+    - match:
+        path:
+          prefix: /api
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /auth
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /webhooks
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /ws
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /live
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /ready
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /metrics
+      component:
+        name: api
+        preserve_path_prefix: true
+    - match:
+        path:
+          prefix: /
+      component:
+        name: web
+        preserve_path_prefix: true
