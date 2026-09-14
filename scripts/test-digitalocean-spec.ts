@@ -28,6 +28,7 @@ type AppSpec = {
 const specPath = new URL("../.do/app.yaml", import.meta.url);
 const source = readFileSync(specPath, "utf8");
 const spec = parse(source) as AppSpec;
+const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`DigitalOcean spec: ${message}`);
@@ -61,6 +62,7 @@ function assertPlaceholderSecret(component: Component, key: string): void {
 assert(spec.name === "kapi", "app name must remain kapi");
 assert(spec.region === "sgp", "app region must remain sgp unless the database moves with it");
 assert(!/render|onrender/i.test(source), "contains obsolete Render configuration");
+assert(dockerfile.includes("@openai/codex@0.154.0"), "runtime image must include the pinned Codex App Server");
 
 const api = named(spec.services, "api");
 const worker = named(spec.workers, "operations");

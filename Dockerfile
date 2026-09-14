@@ -11,7 +11,8 @@ RUN pnpm build:agent && pnpm build:control-plane && pnpm build:web && pnpm typec
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-RUN groupadd --system --gid 10001 kapi \
+RUN npm install --global --ignore-scripts @openai/codex@0.154.0 \
+  && groupadd --system --gid 10001 kapi \
   && useradd --system --uid 10001 --gid kapi --home-dir /app --shell /usr/sbin/nologin kapi
 COPY --from=build --chown=kapi:kapi /app/apps/control-plane/dist ./apps/control-plane/dist
 COPY --from=build --chown=kapi:kapi /app/apps/agent/dist ./apps/agent/dist

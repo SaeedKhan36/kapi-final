@@ -19,6 +19,7 @@
     "@kapi/protocol": "workspace:*",
     "@kapi/queue": "workspace:*",
     "@kapi/vm": "workspace:*",
+    "@openai/codex": "0.154.0",
     "cron-parser": "^5.10.0",
     "hono": "^4.6.14",
     "ws": "^8.18.0",

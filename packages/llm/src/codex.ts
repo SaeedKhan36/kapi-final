@@ -1,4 +1,3 @@
-import { createHash, randomBytes } from "node:crypto";
 import type { DbHandle } from "@kapi/db";
 import { decrypt, encrypt } from "@kapi/identity";
 import { newId } from "@kapi/protocol";
@@ -13,7 +12,7 @@ import { newId } from "@kapi/protocol";
 
 const AUTH_BASE = process.env.KAPI_CODEX_AUTH_URL ?? "https://auth.openai.com";
 const API_BASE = process.env.KAPI_CODEX_API_URL ?? "https://chatgpt.com/backend-api/codex";
-/** The public client id the Codex CLI uses for its device/PKCE flow. */
+/** Public Codex client used to refresh grants created by Codex App Server. */
 const CLIENT_ID = process.env.KAPI_CODEX_CLIENT_ID ?? "app_EMoamEEZ73f0CkXaXp7hrann";
 const SCOPES = "openid profile email offline_access";
 
@@ -40,35 +39,6 @@ export function codexHeaders(accountId?: string | null): Record<string, string> 
     originator: "codex_cli_rs",
     ...(accountId ? { "chatgpt-account-id": accountId } : {}),
   };
-}
-
-/* ------------------------------------------------------------------ */
-/* PKCE                                                                */
-/* ------------------------------------------------------------------ */
-
-const b64u = (b: Buffer) => b.toString("base64url");
-
-export type PkcePair = { verifier: string; challenge: string; state: string };
-
-export function createPkce(): PkcePair {
-  const verifier = b64u(randomBytes(64));
-  return {
-    verifier,
-    challenge: b64u(createHash("sha256").update(verifier).digest()),
-    state: b64u(randomBytes(16)),
-  };
-}
-
-export function authorizationUrl(pkce: PkcePair, redirectUri: string): string {
-  const url = new URL("/oauth/authorize", AUTH_BASE);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", CLIENT_ID);
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("scope", SCOPES);
-  url.searchParams.set("code_challenge", pkce.challenge);
-  url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("state", pkce.state);
-  return url.toString();
 }
 
 async function tokenRequest(body: Record<string, string>): Promise<CodexGrant> {
@@ -115,15 +85,6 @@ function accountIdFrom(idToken?: string): string | undefined {
     return undefined;
   }
 }
-
-export const exchangeCode = (code: string, verifier: string, redirectUri: string) =>
-  tokenRequest({
-    grant_type: "authorization_code",
-    client_id: CLIENT_ID,
-    code,
-    code_verifier: verifier,
-    redirect_uri: redirectUri,
-  });
 
 export const refreshGrant = (refreshToken: string) =>
   tokenRequest({

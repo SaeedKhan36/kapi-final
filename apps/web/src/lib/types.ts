@@ -52,6 +52,14 @@ export type Connection = {
   expiresAt: string | null; updatedAt: string;
 };
 
+export type CodexDeviceLogin = {
+  loginId: string; verificationUrl: string; userCode: string;
+};
+
+export type CodexDeviceLoginStatus = {
+  status: "pending" | "connected" | "failed"; error?: string;
+};
+
 export type Project = {
   id: string; ownerId: string; name: string; repoUrl: string;
   defaultBranch: string; budgets: Record<string, number>; createdAt: string;

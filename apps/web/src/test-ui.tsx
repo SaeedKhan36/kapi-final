@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AgentTree } from "./components/AgentTree.tsx";
 import { BudgetMeter } from "./components/RunPanel.tsx";
 import { Badge, RoleChip } from "./components/ui.tsx";
-import { Readiness } from "./pages/Setup.tsx";
+import { CodexDeviceCode, Readiness } from "./pages/Setup.tsx";
 import { Landing } from "./pages/Landing.tsx";
 import { Link, match } from "./router.tsx";
 import type { AgentNode, TreeNode } from "./lib/agents.ts";
@@ -62,6 +62,16 @@ await test("setup readiness remains understandable without color", () => {
   );
   assert(html.includes("needs attention"), "the warning has an accessible label");
   assert(html.includes("Set the encryption key"), "the corrective detail is visible");
+});
+
+await test("Codex device login shows a safe OpenAI link and one-time code", () => {
+  const html = renderToStaticMarkup(<CodexDeviceCode login={{
+    loginId: "login_1", verificationUrl: "https://auth.openai.com/codex/device",
+    userCode: "ABCD-1234",
+  }} />);
+  assert(html.includes("ABCD-1234"), "the one-time code is visible");
+  assert(html.includes("https://auth.openai.com/codex/device"), "verification stays on OpenAI");
+  assert(html.includes("waiting for approval"), "pending state is explicit");
 });
 
 await test("route matching decodes ids and rejects malformed escapes", () => {

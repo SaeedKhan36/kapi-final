@@ -11,6 +11,7 @@ import { Store, type EventRow } from "../apps/control-plane/src/store.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { attachWebSocket } from "../apps/control-plane/src/ws.ts";
 import { RateLimiter, clientAddress } from "../apps/control-plane/src/rate-limiter.ts";
+import type { CodexConnectionBroker } from "../apps/control-plane/src/codex-device-auth.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
 import { createTestDb, useHermeticTestConfig } from "./test-db.ts";
 
@@ -26,7 +27,21 @@ console.log(`\n  database: ${handle.target}`);
 const store = new Store(handle);
 const hub = new EventHub(store, handle, 250);
 const auth = new Authenticator(handle);
-const app = createApp({ handle, store, hub, auth, githubApp: null });
+let codexLoginUser: string | undefined;
+const codexDeviceAuth: CodexConnectionBroker = {
+  start: async (userId) => {
+    codexLoginUser = userId;
+    return {
+      loginId: "login_test", verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "TEST-CODE",
+    };
+  },
+  status: (userId, loginId) => userId === codexLoginUser && loginId === "login_test"
+    ? { status: "pending" } : null,
+  cancelUser: async () => {},
+  close: async () => {},
+};
+const app = createApp({ handle, store, hub, auth, githubApp: null, codexDeviceAuth });
 
 const server = serve({ fetch: app.fetch, port: 0 });
 // The same wiring index.ts uses - the websocket tests below exercise the real
@@ -84,27 +99,20 @@ await test("setup reports safe readiness metadata without credentials", async ()
   assert(!("accessToken" in body.codex), "no credential leaves the API");
 });
 
-await test("Codex connection rejects an off-site return URL", async () => {
-  const result = await api("POST", "/api/connections/codex/start", {
-    returnTo: "https://attacker.example/steal",
-  });
-  equal(result.status, 400, "open redirects are refused");
-});
-
-await test("local Codex connection accepts equivalent loopback hostnames", async () => {
-  const priorWebUrl = process.env.KAPI_WEB_URL;
-  try {
-    process.env.KAPI_WEB_URL = "http://localhost:3000";
-    const result = await api<{ url: string; state: string }>(
-      "POST", "/api/connections/codex/start", { returnTo: "http://127.0.0.1:3000/setup" },
-    );
-    equal(result.status, 200, "the local OAuth handoff starts");
-    equal(new URL(result.body.url).hostname, "auth.openai.com", "the handoff targets OpenAI auth");
-    assert(result.body.state.length > 10, "the OAuth flow carries CSRF state");
-  } finally {
-    if (priorWebUrl === undefined) delete process.env.KAPI_WEB_URL;
-    else process.env.KAPI_WEB_URL = priorWebUrl;
-  }
+await test("Codex device login starts and can only be polled by its owner", async () => {
+  const started = await api<{ loginId: string; verificationUrl: string; userCode: string }>(
+    "POST", "/api/connections/codex/start",
+  );
+  equal(started.status, 200, "the supported App Server handoff starts");
+  equal(started.body.verificationUrl, "https://auth.openai.com/codex/device", "OpenAI owns verification");
+  equal(started.body.userCode, "TEST-CODE", "the browser receives the one-time code");
+  const pending = await api<{ status: string }>(
+    "GET", `/api/connections/codex/pending/${started.body.loginId}`,
+  );
+  equal(pending.status, 200, "the owner can poll the login");
+  equal(pending.body.status, "pending", "pending state is explicit");
+  equal((await api("GET", "/api/connections/codex/pending/login_unknown")).status, 404,
+    "unknown login ids reveal nothing");
 });
 
 await test("production observability and webhook routes fail closed without shared secrets", async () => {

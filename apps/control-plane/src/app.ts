@@ -23,6 +23,7 @@ import { allowedOrigins } from "./config.ts";
 import { log } from "./log.ts";
 import type { RequestTracker } from "./request-tracker.ts";
 import { RateLimiter, clientAddress } from "./rate-limiter.ts";
+import { CodexDeviceAuth, type CodexConnectionBroker } from "./codex-device-auth.ts";
 
 type Env = { Variables: { principal: Principal } };
 
@@ -66,6 +67,7 @@ export function createApp(deps: {
   scheduler?: Scheduler;
   requests?: RequestTracker;
   githubApp?: GitHubApp | null;
+  codexDeviceAuth?: CodexConnectionBroker;
 }) {
   const { handle, store, hub, auth } = deps;
   const runService = deps.runService ?? new RunService(handle, store, hub);
@@ -78,6 +80,7 @@ export function createApp(deps: {
     ? (githubConfig ? new GitHubApp(githubConfig) : null)
     : deps.githubApp;
   const rate = new RateLimiter(handle);
+  const codexDeviceAuth = deps.codexDeviceAuth ?? new CodexDeviceAuth(handle);
 
   app.use("*", async (_c, next) => {
     const leave = deps.requests?.enter();
@@ -231,7 +234,7 @@ export function createApp(deps: {
   app.get("/api/me", (c) => c.json(c.get("principal")));
 
   // Mounted after the auth middleware: connecting an account is a user action.
-  app.route("/", createConnectionRoutes({ handle }));
+  app.route("/", createConnectionRoutes({ handle, codexDeviceAuth }));
 
   app.get("/api/setup", async (c) => {
     const principal = c.get("principal");

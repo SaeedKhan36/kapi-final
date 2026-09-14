@@ -12,6 +12,7 @@ import { Provisioner } from "./provisioner.ts";
 import { startOperations } from "./operations.ts";
 import { validateProductionConfig } from "./config.ts";
 import { RequestTracker } from "./request-tracker.ts";
+import { CodexDeviceAuth } from "./codex-device-auth.ts";
 
 validateProductionConfig();
 
@@ -22,9 +23,11 @@ const auth = new Authenticator(handle);
 const operationsExternal = process.env.KAPI_OPERATIONS === "off";
 const provisioner = operationsExternal ? null : new Provisioner(handle);
 const requests = new RequestTracker();
+const codexDeviceAuth = new CodexDeviceAuth(handle);
 const app = createApp({
   handle, store, hub, auth, requests,
   vmProvider: provisioner?.providerName ?? "external-worker",
+  codexDeviceAuth,
 });
 const operations = provisioner ? startOperations({ handle, store, hub, provisioner }) : null;
 
@@ -54,6 +57,7 @@ const shutdown = async () => {
   wss.close();
 
   await operations?.stop();
+  await codexDeviceAuth.close();
   await hub.close();
   await requests.drain();
 

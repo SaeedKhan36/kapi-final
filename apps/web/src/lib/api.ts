@@ -1,5 +1,6 @@
 import type {
-  Connection, Health, Job, Message, Principal, Project, ProjectIntegrations, Run, RunDetail,
+  CodexDeviceLogin, CodexDeviceLoginStatus, Connection, Health, Job, Message, Principal,
+  Project, ProjectIntegrations, Run, RunDetail,
   RunEvent, Schedule, SecretMeta, SecretScope, Setup, Thread,
 } from "./types.ts";
 
@@ -45,8 +46,12 @@ export const api = {
   me: () => request<Principal>("GET", "/api/me"),
   setup: () => request<Setup>("GET", "/api/setup"),
   connections: () => request<Connection[]>("GET", "/api/connections"),
-  startCodexConnection: (returnTo = location.href) =>
-    request<{ url: string; state: string }>("POST", "/api/connections/codex/start", { returnTo }),
+  startCodexConnection: () =>
+    request<CodexDeviceLogin>("POST", "/api/connections/codex/start"),
+  codexConnectionStatus: (loginId: string) =>
+    request<CodexDeviceLoginStatus>(
+      "GET", `/api/connections/codex/pending/${encodeURIComponent(loginId)}`,
+    ),
   disconnectCodex: () => request<{ disconnected: boolean }>("DELETE", "/api/connections/codex"),
 
   listProjects: () => request<Project[]>("GET", "/api/projects"),

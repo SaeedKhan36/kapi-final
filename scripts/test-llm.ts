@@ -6,9 +6,10 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModel } from "ai";
 import {
   BudgetExceededError, ModelRouter, NoModelAvailableError, classifyFailure,
-  codexHeaders, createPkce, authorizationUrl, loadGrant, saveGrant, markGrantRevoked, modelsFor,
+  codexHeaders, loadGrant, saveGrant, markGrantRevoked, modelsFor,
 } from "@kapi/llm";
 import { assert, equal, group, report, test } from "./harness.ts";
+import { grantFromCodexAuthCache } from "../apps/control-plane/src/codex-device-auth.ts";
 import { seedRun } from "./seed.ts";
 import { createTestDb } from "./test-db.ts";
 
@@ -207,7 +208,7 @@ await test("generateObject validates against a schema", async () => {
 
 /* ------------------------------------------------------------------ */
 
-group("codex oauth");
+group("codex authentication");
 
 await test("model requests identify the ChatGPT subscription account", () => {
   const headers = codexHeaders("acct_1");
@@ -215,14 +216,21 @@ await test("model requests identify the ChatGPT subscription account", () => {
   equal(headers.originator, "codex_cli_rs", "request identifies the Codex client");
 });
 
-await test("the authorization url carries a PKCE challenge, never the verifier", () => {
-  const pkce = createPkce();
-  const url = new URL(authorizationUrl(pkce, "http://localhost:8787/cb"));
-  equal(url.searchParams.get("code_challenge_method"), "S256", "S256");
-  equal(url.searchParams.get("code_challenge"), pkce.challenge, "challenge is sent");
-  equal(url.searchParams.get("response_type"), "code", "auth-code flow");
-  assert(!url.toString().includes(pkce.verifier), "the verifier never leaves the server");
-  assert(pkce.challenge !== pkce.verifier, "challenge is a hash, not the secret itself");
+await test("the App Server auth cache becomes a bounded encrypted grant", () => {
+  const exp = Math.floor(Date.now() / 1_000) + 3_600;
+  const accessToken = `header.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.signature`;
+  const grant = grantFromCodexAuthCache({
+    auth_mode: "chatgpt",
+    tokens: { access_token: accessToken, refresh_token: "refresh", account_id: "acct_1" },
+  });
+  equal(grant.accessToken, accessToken, "the access token is imported");
+  equal(grant.refreshToken, "refresh", "the refresh token is imported");
+  equal(grant.accountId, "acct_1", "the account is retained");
+  equal(grant.expiresAt, exp * 1_000, "the JWT expiry bounds its lifetime");
+  let rejected = false;
+  try { grantFromCodexAuthCache({ auth_mode: "apikey", tokens: { access_token: accessToken } }); }
+  catch { rejected = true; }
+  assert(rejected, "non-subscription credentials are refused");
 });
 
 await test("a grant is stored encrypted and read back", async () => {

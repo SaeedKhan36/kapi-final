@@ -58,7 +58,7 @@ only the Captain decides whether to spawn a fixer or request another review.
 | `apps/agent` | the in-VM binary — one bundled file, claims a job and dials home |
 | `apps/web` | the browser UI — thread chat, and the fleet as it spawns itself |
 | `packages/agent-core` | the turn loop, tools, and Build, Captain, and Review roles |
-| `packages/llm` | Codex subscription routing on the Vercel AI SDK: OAuth and budgets |
+| `packages/llm` | Codex subscription routing on the Vercel AI SDK: encrypted grants and budgets |
 | `packages/vm` | `VmProvider`: local, docker, daytona |
 | `packages/protocol` | zod wire types — jobs, events, addressing, agent + model API, verdicts |
 | `packages/db` | Drizzle schema, connect/verify path, advisory-locked bootstrap, PGlite |
@@ -322,9 +322,12 @@ otherwise the UI reports cost as unavailable and the VM-time budget remains the 
 
 ### Codex sign-in
 
-`POST /api/connections/codex/start` returns a PKCE authorization URL; the callback stores a
-refreshable grant in the same AES-256-GCM envelope as every other secret, and short-lived
-access tokens are minted from it per job.
+`POST /api/connections/codex/start` launches the pinned Codex App Server and returns its
+device-code ceremony. The browser shows the one-time code and polls for completion. Codex
+owns the supported ChatGPT sign-in and writes its grant into an isolated temporary home;
+Kapi immediately imports that refreshable grant into the same AES-256-GCM envelope as every
+other secret and deletes the plaintext cache. Short-lived access tokens are then refreshed
+and scoped to the connected user.
 
 This is the only model credential accepted by the router. OpenAI API keys are intentionally
 not used because they are usage-billed separately from a ChatGPT/Codex subscription.

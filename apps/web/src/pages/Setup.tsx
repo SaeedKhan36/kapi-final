@@ -1,26 +1,50 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "~/lib/api.ts";
-import type { Principal, Setup as SetupState } from "~/lib/types.ts";
+import type { CodexDeviceLogin, Principal, Setup as SetupState } from "~/lib/types.ts";
 import { SecretManager } from "~/components/SecretManager.tsx";
 import { Badge, Button, Card, ErrorNote, Spinner } from "~/components/ui.tsx";
 
 export function Setup({ principal }: { principal: Principal }) {
-  const oauthResult = new URLSearchParams(location.search).get("codex");
   const [setup, setSetup] = useState<SetupState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deviceLogin, setDeviceLogin] = useState<CodexDeviceLogin | null>(null);
 
   const load = useCallback(() => {
     api.setup().then(setSetup).catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
   useEffect(load, [load]);
+  useEffect(() => {
+    if (!deviceLogin) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const result = await api.codexConnectionStatus(deviceLogin.loginId);
+        if (stopped || result.status === "pending") return;
+        setBusy(false);
+        setDeviceLogin(null);
+        if (result.status === "connected") load();
+        else setError(result.error ?? "Codex sign-in failed");
+      } catch (err) {
+        if (!stopped) {
+          setBusy(false);
+          setDeviceLogin(null);
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      }
+    };
+    const timer = setInterval(() => void poll(), 2_000);
+    void poll();
+    return () => { stopped = true; clearInterval(timer); };
+  }, [deviceLogin, load]);
 
   const connect = async () => {
     setBusy(true);
     setError(null);
     try {
-      const { url } = await api.startCodexConnection(`${location.origin}/setup`);
-      location.assign(url);
+      const login = await api.startCodexConnection();
+      setDeviceLogin(login);
+      window.open(login.verificationUrl, "_blank", "noopener,noreferrer");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
@@ -57,15 +81,8 @@ export function Setup({ principal }: { principal: Principal }) {
         </p>
       </header>
 
-      {oauthResult === "connected" && (
-        <p className="rounded-lg border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok">
-          Codex connected successfully.
-        </p>
-      )}
-      {oauthResult === "error" && (
-        <ErrorNote>Codex could not be connected. Try again or check the control-plane logs.</ErrorNote>
-      )}
       {error && <ErrorNote>{error}</ErrorNote>}
+      {deviceLogin && <CodexDeviceCode login={deviceLogin} />}
 
       {setup && (
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -142,6 +159,31 @@ export function Readiness(
       </div>
       <p className="mt-2 text-sm font-medium">{value}</p>
       <p className="mt-1 text-xs text-muted">{detail}</p>
+    </Card>
+  );
+}
+
+export function CodexDeviceCode({ login }: { login: CodexDeviceLogin }) {
+  return (
+    <Card className="border-[#7dd3fc] bg-[#f0f9ff] p-4">
+      <p className="text-sm font-semibold">Finish signing in to Codex</p>
+      <p className="mt-1 text-xs text-muted">
+        Open the secure OpenAI page and enter this one-time code. This page will update automatically.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <code className="rounded-lg border-[1.5px] border-line bg-white px-4 py-2 text-lg font-bold tracking-[0.16em]">
+          {login.userCode}
+        </code>
+        <a
+          className="rounded-full border-[1.5px] border-line bg-[#bae6fd] px-4 py-2 text-sm font-semibold text-bright"
+          href={login.verificationUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open OpenAI sign-in
+        </a>
+        <span className="inline-flex items-center gap-2 text-xs text-muted"><Spinner /> waiting for approval…</span>
+      </div>
     </Card>
   );
 }
