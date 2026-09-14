@@ -4,7 +4,7 @@ import {
 } from "lucide-react";
 import { GithubMark, Logo } from "../Logo.tsx";
 
-const REPO = "https://github.com/SaeedKhan36/Kapi";
+const REPO = "https://github.com/SaeedKhan36/kapi-final";
 
 const NAV = [
   { href: "#how", label: "How it works" },

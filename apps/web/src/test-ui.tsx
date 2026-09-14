@@ -53,6 +53,7 @@ await test("the landing page describes the adaptive captain rather than a frozen
   assert(html.includes("There is no frozen task graph"), "the implementation model is accurate");
   assert(!html.includes("Gemini") && !html.includes("Infinite parallel"), "retired product claims are gone");
   assert(html.includes('href="/app"'), "the primary call to action reaches the dashboard");
+  assert(html.includes("https://github.com/SaeedKhan36/kapi-final"), "source links target this repository");
 });
 
 await test("setup readiness remains understandable without color", () => {
