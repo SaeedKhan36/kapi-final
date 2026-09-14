@@ -8,13 +8,13 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: "http://127.0.0.1:3000",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "pnpm build:web && pnpm --filter @kapi/web preview --host 127.0.0.1 --port 4173",
-    url: "http://127.0.0.1:4173",
+    command: "DATABASE_URL= KAPI_PGLITE_DIR=memory://browser-e2e pnpm dev",
+    url: "http://127.0.0.1:3000/api/health",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

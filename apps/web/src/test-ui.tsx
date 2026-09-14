@@ -4,7 +4,7 @@ import { BudgetMeter } from "./components/RunPanel.tsx";
 import { Badge, RoleChip } from "./components/ui.tsx";
 import { Readiness } from "./pages/Setup.tsx";
 import { Landing } from "./pages/Landing.tsx";
-import { match } from "./router.tsx";
+import { Link, match } from "./router.tsx";
 import type { AgentNode, TreeNode } from "./lib/agents.ts";
 import { assert, group, report, test } from "../../../scripts/harness.ts";
 
@@ -67,6 +67,12 @@ await test("setup readiness remains understandable without color", () => {
 await test("route matching decodes ids and rejects malformed escapes", () => {
   assert(match("/projects/a%20b", "/projects/:id")?.id === "a b", "encoded ids decode");
   assert(match("/projects/%ZZ", "/projects/:id") === null, "bad URL encoding cannot crash the app");
+});
+
+await test("client links preserve native anchor attributes", () => {
+  const html = renderToStaticMarkup(<Link to="/projects/prj_test" aria-label="Back to project">←</Link>);
+  assert(html.includes('aria-label="Back to project"'), "accessible labels reach the anchor");
+  assert(html.includes('href="/projects/prj_test"'), "the navigation target remains intact");
 });
 
 report();

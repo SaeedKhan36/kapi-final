@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
+import { useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent } from "react";
 
 /**
  * The whole router.
@@ -48,14 +48,17 @@ export function match(path: string, pattern: string): Record<string, string> | n
 }
 
 export function Link(
-  { to, className, children }: { to: string; className?: string; children: ReactNode },
+  { to, onClick: suppliedOnClick, ...props }:
+    { to: string } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">,
 ) {
   // Modified clicks still belong to the browser: a middle-click or cmd-click on
   // a link that only ever calls preventDefault cannot open a new tab.
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    suppliedOnClick?.(e);
+    if (e.defaultPrevented) return;
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
     e.preventDefault();
     navigate(to);
   };
-  return <a href={to} onClick={onClick} className={className}>{children}</a>;
+  return <a {...props} href={to} onClick={onClick} />;
 }
