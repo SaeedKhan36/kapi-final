@@ -16,6 +16,7 @@ import { validateProductionConfig, validateReleaseConfig } from "../apps/control
 import { applyLocalDevelopmentDefaults } from "../apps/control-plane/src/local-dev.ts";
 import { evaluateLifecycle, validateStagingSetup } from "./staging-evidence.ts";
 import { RESTORE_TABLES, compareRestoreCounts, parseExpectedCounts } from "./restore-evidence.ts";
+import { requireCodexExecutable } from "./release-prerequisites.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
 
 process.env.KAPI_PGLITE_DIR = "memory://operations-test";
@@ -47,6 +48,22 @@ await test("whole-database truncation requires an explicit external opt-in", asy
 });
 
 group("production configuration");
+
+await test("release preflight requires a working Codex App Server executable", async () => {
+  equal(
+    requireCodexExecutable({}, () => ({ status: 0, stdout: "codex-cli 0.154.0\n" })),
+    "codex-cli 0.154.0",
+    "the supported CLI version is reported",
+  );
+  await throws(
+    () => requireCodexExecutable({}, () => ({ status: null, error: new Error("ENOENT") })),
+    "a missing runtime executable fails preflight",
+  );
+  await throws(
+    () => requireCodexExecutable({}, () => ({ status: 0, stdout: "not-codex 1.0.0" })),
+    "an unrelated executable cannot satisfy the gate",
+  );
+});
 
 await test("the staging gate accepts the current setup API contract", async () => {
   validateStagingSetup({

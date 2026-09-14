@@ -4,6 +4,7 @@ loadEnv();
 import {
   validateReleaseConfig, type ReleaseConfigRole,
 } from "../apps/control-plane/src/config.ts";
+import { requireCodexExecutable } from "./release-prerequisites.ts";
 
 const requested = process.argv.find((arg) => arg.startsWith("--role="))?.slice("--role=".length)
   ?? process.env.KAPI_PREFLIGHT_ROLE
@@ -22,7 +23,8 @@ let failed = false;
 for (const role of roles) {
   try {
     validateReleaseConfig(role);
-    console.log(`ok production ${role} configuration`);
+    const detail = role === "api" ? `; ${requireCodexExecutable()}` : "";
+    console.log(`ok production ${role} configuration${detail}`);
   } catch (err) {
     failed = true;
     console.error(`FAIL production ${role} configuration: ${err instanceof Error ? err.message : String(err)}`);

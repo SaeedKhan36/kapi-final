@@ -23,6 +23,7 @@
     "test:runtime": "pnpm build:agent && pnpm build:control-plane && tsx scripts/test-runtime.ts",
     "audit:prod": "pnpm audit --prod --audit-level=high",
     "release:preflight": "tsx scripts/preflight-production.ts",
+    "release:readiness": "tsx scripts/probe-release-readiness.ts",
     "release:staging": "tsx scripts/probe-staging-lifecycle.ts",
     "release:snapshot-counts": "tsx scripts/verify-restore.ts --snapshot",
     "release:verify-restore": "tsx scripts/verify-restore.ts",

@@ -8,10 +8,10 @@ const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)
 /**
  * Daytona Cloud - real isolation, ~90ms starts.
  *
- * NOTE ON COST: Daytona is billed per second (~$0.08/hr for 1 vCPU / 2GiB) with
- * $200 of trial credit, not a perpetual free tier. Idle sandboxes quietly burn
- * that credit, so `idleTtlSeconds` is always set and `destroy` is called in a
- * finally block by callers.
+ * NOTE ON COST: provider pricing and promotional credits change. The operator
+ * supplies the current authoritative rate for accounting. `idleTtlSeconds` is
+ * always set and callers destroy sandboxes in a finally block so idle resources
+ * do not continue billing unnoticed.
  *
  * This file is the ONLY place the Daytona SDK may be imported.
  */

@@ -24,13 +24,26 @@ The exact account setup, secret ownership, creation command, and safe first roll
 [`DIGITALOCEAN.md`](./DIGITALOCEAN.md).
 
 Before starting each service, load that service's production environment and run its strict
-release preflight. This validates configuration without printing secret values:
+release preflight. This validates configuration and proves that the API can launch the pinned
+Codex App Server without printing secret values:
 
 ```bash
 pnpm release:preflight -- --role=api
 pnpm release:preflight -- --role=worker
 pnpm release:preflight -- --role=web
 ```
+
+Before deployment, run the read-only live integration gate from the repository checkout:
+
+```bash
+KAPI_RELEASE_GITHUB_REPO=owner/canary-repository pnpm release:readiness
+```
+
+It verifies current migrations, vault compatibility and an active Codex connection, WorkOS API
+authentication, the GitHub App installation and Contents permission, the Daytona SDK/key, and a
+positive authoritative Daytona cost rate. It does not create a sandbox, modify a repository, or
+print credential values. Run `pnpm probe:daytona` separately when one create/destroy billing probe
+is acceptable.
 
 ### Environment ownership
 
