@@ -23,6 +23,24 @@ export type LifecycleThread = {
 
 export type EvidenceCheck = { name: string; ok: boolean; detail: string };
 
+export type StagingSetup = {
+  auth?: { mode?: string; authenticated?: boolean };
+  vault?: { configured?: boolean };
+  codex?: { connected?: boolean };
+};
+
+/** Rejects a staging probe before it starts billable or repository-changing work. */
+export function validateStagingSetup(setup: StagingSetup): void {
+  if (setup.auth?.mode !== "workos") {
+    throw new Error(`staging auth is ${setup.auth?.mode ?? "unknown"}, expected workos`);
+  }
+  if (!setup.auth.authenticated) throw new Error("the staging probe session is not authenticated");
+  if (!setup.vault?.configured) throw new Error("staging vault is not configured");
+  if (!setup.codex?.connected) {
+    throw new Error("the authenticated staging user has not connected Codex");
+  }
+}
+
 /** Converts a completed staging run into explicit release evidence. */
 export function evaluateLifecycle(
   detail: LifecycleEvidence, thread: LifecycleThread,

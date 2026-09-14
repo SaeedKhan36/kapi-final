@@ -289,8 +289,13 @@ await test("schedules can pause, resume, and run without overlap", async () => {
   equal(paused.body.nextRunAt, null, "no occurrence while paused");
   const resumed = await api<{ enabled: boolean }>("PATCH", `/api/schedules/${scheduleId}`, { enabled: true });
   equal(resumed.body.enabled, true, "resumed");
-  const first = await api<{ run: { id: string } }>("POST", `/api/schedules/${scheduleId}/run`);
+  const first = await api<{ run: { id: string }; job: { id: string }; message: { id: string } }>(
+    "POST", `/api/schedules/${scheduleId}/run`,
+  );
   equal(first.status, 202, "manual occurrence started");
+  assert(first.body.run.id.startsWith("run_"), "manual occurrence returns its run");
+  assert(first.body.job.id.startsWith("job_"), "manual occurrence returns its root job");
+  assert(first.body.message.id.startsWith("msg_"), "manual occurrence returns its system message");
   const second = await api("POST", `/api/schedules/${scheduleId}/run`);
   equal(second.status, 409, "overlap skipped");
   await api("POST", `/api/runs/${first.body.run.id}/cancel`);

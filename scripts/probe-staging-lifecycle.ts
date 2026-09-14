@@ -1,7 +1,10 @@
 import { loadEnv } from "@kapi/env";
 loadEnv();
 
-import { evaluateLifecycle, type LifecycleEvidence, type LifecycleThread } from "./staging-evidence.ts";
+import {
+  evaluateLifecycle, validateStagingSetup, type LifecycleEvidence, type LifecycleThread,
+  type StagingSetup,
+} from "./staging-evidence.ts";
 
 const base = required("KAPI_SMOKE_URL").replace(/\/$/, "");
 const cookie = required("KAPI_SMOKE_COOKIE");
@@ -25,12 +28,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 let runId: string | null = null;
 let terminal = false;
 try {
-  const setup = await request<{ auth?: string; vault?: { configured?: boolean }; codex?: { connected?: boolean } }>(
-    "GET", "/api/setup",
-  );
-  if (setup.auth !== "workos") throw new Error(`staging auth is ${setup.auth ?? "unknown"}, expected workos`);
-  if (!setup.vault?.configured) throw new Error("staging vault is not configured");
-  if (!setup.codex?.connected) throw new Error("the authenticated staging user has not connected Codex");
+  const setup = await request<StagingSetup>("GET", "/api/setup");
+  validateStagingSetup(setup);
 
   const integrations = await request<{ github?: { configured?: boolean; installed?: boolean; reason?: string } }>(
     "GET", `/api/projects/${encodeURIComponent(projectId)}/integrations`,

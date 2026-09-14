@@ -14,7 +14,7 @@ import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
 import { validateProductionConfig, validateReleaseConfig } from "../apps/control-plane/src/config.ts";
 import { applyLocalDevelopmentDefaults } from "../apps/control-plane/src/local-dev.ts";
-import { evaluateLifecycle } from "./staging-evidence.ts";
+import { evaluateLifecycle, validateStagingSetup } from "./staging-evidence.ts";
 import { RESTORE_TABLES, compareRestoreCounts, parseExpectedCounts } from "./restore-evidence.ts";
 import { assert, equal, group, report, test, throws } from "./harness.ts";
 
@@ -47,6 +47,30 @@ await test("whole-database truncation requires an explicit external opt-in", asy
 });
 
 group("production configuration");
+
+await test("the staging gate accepts the current setup API contract", async () => {
+  validateStagingSetup({
+    auth: { mode: "workos", authenticated: true },
+    vault: { configured: true },
+    codex: { connected: true },
+  });
+  await throws(
+    () => validateStagingSetup({
+      auth: { mode: "workos", authenticated: false },
+      vault: { configured: true },
+      codex: { connected: true },
+    }),
+    "an unauthenticated smoke-test cookie cannot start a release run",
+  );
+  await throws(
+    () => validateStagingSetup({
+      auth: { mode: "dev", authenticated: true },
+      vault: { configured: true },
+      codex: { connected: true },
+    }),
+    "development authentication cannot pass the staging gate",
+  );
+});
 
 await test("one-command development defaults stay local and preserve shell overrides", () => {
   const defaults: NodeJS.ProcessEnv = {};
