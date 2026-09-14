@@ -7,8 +7,8 @@ only when every required item has an evidence link or dated operator note.
 ## Repository gates
 
 - [x] Changes are committed and pushed to `main`.
-- [x] Hosted `Release candidate` and CodeQL workflows passed for commit `38e10fa`; the release
-  SHA itself must also be green.
+- [x] Hosted `Release candidate` and CodeQL workflows passed for commit `4b1bd48`, including the
+  PostgreSQL, Chromium, compiled-runtime, and Docker-image jobs.
 - [x] PostgreSQL contention, fleet-budget races, deterministic UI checks, Chromium E2E,
   compiled-runtime smoke checks, dependency audit, and production builds passed.
 - [x] Local health, readiness, and authenticated-metrics smoke checks passed.
@@ -33,14 +33,19 @@ after the student credit is active.
 
 ## Staging gates
 
-- [ ] `pnpm release:preflight` passes for the API, operations worker, and web build.
+- [x] `pnpm release:preflight` passes for the API, operations worker, and web build.
 - [ ] WorkOS login, refresh, logout, and authenticated API access work through HTTPS.
 - [ ] A user can connect and revoke a real Codex subscription grant.
 - [ ] The GitHub App is installed with Contents write permission on the canary repository.
 - [ ] Signed `check_run` or `check_suite` deliveries reach the Captain's inbox.
-- [ ] The Daytona provider probe creates, executes in, and destroys a sandbox.
+- [x] The Daytona provider probe creates, executes in, and destroys a sandbox.
 - [ ] `pnpm release:staging` proves one real Captain → Build → PR/CI → Review → Captain run.
 - [ ] The production smoke command passes with an authenticated session and project.
+
+The read-only integration gate additionally passes WorkOS API authentication, PostgreSQL
+connectivity/current migrations, Daytona configuration and cost accounting, and Codex App Server
+availability. As of 2026-09-15 it reports only the missing user-authorized Codex grant and GitHub
+App installation. See [`VERIFICATION.md`](./VERIFICATION.md).
 
 For each item, record the date, environment, commit SHA, operator, and a link to redacted
 logs. Never paste cookies, OAuth grants, private keys, installation tokens, or vault values.
