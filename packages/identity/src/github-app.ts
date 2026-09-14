@@ -1,4 +1,5 @@
 import { createPrivateKey } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { SignJWT } from "jose";
 import { gh, GitHubApiError, githubHeaders } from "./github-api.ts";
 import { repoFullName, type RepoRef } from "./types.ts";
@@ -24,21 +25,35 @@ export type GitHubAppConfig = { appId: string; privateKey: string };
 
 export function readAppConfig(env: NodeJS.ProcessEnv = process.env): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID?.trim();
-  const key = env.GITHUB_APP_PRIVATE_KEY?.trim();
+  const inline = env.GITHUB_APP_PRIVATE_KEY?.trim();
+  const file = env.GITHUB_APP_PRIVATE_KEY_FILE?.trim();
+  let key = inline;
+  if (!key && file) {
+    try {
+      key = readFileSync(file, "utf8").trim();
+    } catch {
+      throw new GitHubAppError(`GITHUB_APP_PRIVATE_KEY_FILE cannot be read: ${file}`);
+    }
+  }
   if (!appId || !key) return null;
   return { appId, privateKey: decodeAppPrivateKey(key) };
 }
 
-/** Creates GitHub's short-lived app-level JWT. */
-export async function createAppJwt(config: GitHubAppConfig): Promise<string> {
-  let key;
+/** Parse the configured key at startup instead of discovering a bad PEM on the first GitHub call. */
+export function validateAppPrivateKey(config: GitHubAppConfig): void {
   try {
-    key = createPrivateKey(config.privateKey);
+    createPrivateKey(config.privateKey);
   } catch {
     throw new GitHubAppError(
-      "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key - use the .pem GitHub gave you",
+      "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key - paste the full PEM or set GITHUB_APP_PRIVATE_KEY_FILE",
     );
   }
+}
+
+/** Creates GitHub's short-lived app-level JWT. */
+export async function createAppJwt(config: GitHubAppConfig): Promise<string> {
+  validateAppPrivateKey(config);
+  const key = createPrivateKey(config.privateKey);
 
   const now = Math.floor(Date.now() / 1000);
   return new SignJWT({})

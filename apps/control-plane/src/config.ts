@@ -1,3 +1,5 @@
+import { readAppConfig, validateAppPrivateKey } from "@kapi/identity";
+
 export function allowedOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
   const configured = env.KAPI_ALLOWED_ORIGINS?.split(",").map((v) => v.trim()).filter(Boolean);
   if (configured?.length) return configured;
@@ -51,9 +53,14 @@ export function validateProductionConfig(
     }
 
     const appId = Boolean(env.GITHUB_APP_ID?.trim());
-    const appKey = Boolean(env.GITHUB_APP_PRIVATE_KEY?.trim());
+    const appKey = Boolean(env.GITHUB_APP_PRIVATE_KEY?.trim() || env.GITHUB_APP_PRIVATE_KEY_FILE?.trim());
     if (appId !== appKey) {
-      throw new Error("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be configured together");
+      throw new Error("GITHUB_APP_ID and a GitHub App private key must be configured together");
+    }
+    if (appId && appKey) {
+      const config = readAppConfig(env);
+      if (!config) throw new Error("GitHub App configuration could not be loaded");
+      validateAppPrivateKey(config);
     }
   }
   if (runsOperations &&
@@ -79,8 +86,11 @@ export function validateReleaseConfig(
 
   if (role === "api") {
     validateProductionConfig("api", env);
-    const required = ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"];
-    const missing = required.filter((key) => !env[key]?.trim());
+    const missing = [
+      ...(!env.GITHUB_APP_ID?.trim() ? ["GITHUB_APP_ID"] : []),
+      ...(!env.GITHUB_APP_PRIVATE_KEY?.trim() && !env.GITHUB_APP_PRIVATE_KEY_FILE?.trim()
+        ? ["GITHUB_APP_PRIVATE_KEY"] : []),
+    ];
     if (missing.length) {
       throw new Error(`missing release integration configuration: ${missing.join(", ")}`);
     }

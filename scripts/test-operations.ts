@@ -1,4 +1,8 @@
 import { createDb, truncateAll, type DbHandle } from "@kapi/db";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { newId } from "@kapi/protocol";
 import { claim, complete, enqueue, listJobs, markRunning } from "@kapi/queue";
 import type { ManagedVm, Vm, VmProvider, VmSpec } from "@kapi/vm";
@@ -18,6 +22,9 @@ process.env.KAPI_PGLITE_DIR = "memory://operations-test";
 const handle = await createDb("");
 await truncateAll(handle);
 const store = new Store(handle);
+const githubPrivateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+  type: "pkcs8", format: "pem",
+}).toString();
 await handle.raw(
   `INSERT INTO users (id,workos_id,email,name) VALUES ('usr_ops','ops-test','ops@test.local','Ops')`,
 );
@@ -102,7 +109,7 @@ await test("release preflight requires complete API integrations and exact publi
   const complete: NodeJS.ProcessEnv = {
     ...productionApiEnv(),
     GITHUB_APP_ID: "123",
-    GITHUB_APP_PRIVATE_KEY: "encoded-key",
+    GITHUB_APP_PRIVATE_KEY: githubPrivateKey,
   };
   validateReleaseConfig("api", complete);
   validateReleaseConfig("worker", {
@@ -116,6 +123,19 @@ await test("release preflight requires complete API integrations and exact publi
     () => validateReleaseConfig("api", productionApiEnv()),
     "release API requires its GitHub App",
   );
+  await throws(
+    () => validateReleaseConfig("api", { ...complete, GITHUB_APP_PRIVATE_KEY: "not-a-private-key" }),
+    "release API rejects an invalid GitHub private key before startup",
+  );
+  const keyDir = mkdtempSync(join(tmpdir(), "kapi-github-key-"));
+  const keyFile = join(keyDir, "app.pem");
+  try {
+    writeFileSync(keyFile, githubPrivateKey, { mode: 0o600 });
+    const fileConfig = { ...complete, GITHUB_APP_PRIVATE_KEY: "", GITHUB_APP_PRIVATE_KEY_FILE: keyFile };
+    validateReleaseConfig("api", fileConfig);
+  } finally {
+    rmSync(keyDir, { recursive: true, force: true });
+  }
   await throws(
     () => validateReleaseConfig("api", { ...complete, WORKOS_REDIRECT_URI: "https://api.example.com/wrong" }),
     "release callback must match the public control-plane URL",
@@ -144,7 +164,7 @@ await test("production never exposes unsigned metrics or GitHub webhooks", async
   await throws(() => validateProductionConfig("api", noMetrics), "metrics token is required");
 
   const unsignedGithub: NodeJS.ProcessEnv = {
-    ...productionApiEnv(), GITHUB_APP_ID: "123", GITHUB_APP_PRIVATE_KEY: "encoded-key",
+    ...productionApiEnv(), GITHUB_APP_ID: "123", GITHUB_APP_PRIVATE_KEY: githubPrivateKey,
   };
   delete unsignedGithub.GITHUB_WEBHOOK_SECRET;
   await throws(

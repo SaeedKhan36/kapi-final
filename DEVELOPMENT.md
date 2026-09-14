@@ -40,6 +40,8 @@ VM_PROVIDER=docker pnpm dev
 ```
 
 `pnpm dev:api` and `pnpm dev:web` remain available when only one side is needed.
+For real local GitHub App testing, set `GITHUB_APP_PRIVATE_KEY_FILE` to the downloaded PEM
+instead of flattening a multi-line key into `.env`.
 
 For a disposable local database:
 
