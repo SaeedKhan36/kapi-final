@@ -5,6 +5,7 @@ import {
   authorizationUrl, createPkce, exchangeCode, loadGrant, markGrantRevoked, saveGrant,
   type PkcePair,
 } from "@kapi/llm";
+import { isAllowedWebOrigin } from "./web-url.ts";
 
 type Env = { Variables: { principal: Principal } };
 
@@ -30,7 +31,9 @@ function safeReturnTo(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0) return undefined;
   const web = new URL(process.env.KAPI_WEB_URL ?? "http://localhost:3000");
   const target = new URL(value, web);
-  if (target.origin !== web.origin) throw new Error("returnTo must use the configured KAPI_WEB_URL origin");
+  if (!isAllowedWebOrigin(target, web)) {
+    throw new Error("returnTo must use the configured KAPI_WEB_URL origin");
+  }
   return target.toString();
 }
 

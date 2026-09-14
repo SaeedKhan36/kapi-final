@@ -91,6 +91,22 @@ await test("Codex connection rejects an off-site return URL", async () => {
   equal(result.status, 400, "open redirects are refused");
 });
 
+await test("local Codex connection accepts equivalent loopback hostnames", async () => {
+  const priorWebUrl = process.env.KAPI_WEB_URL;
+  try {
+    process.env.KAPI_WEB_URL = "http://localhost:3000";
+    const result = await api<{ url: string; state: string }>(
+      "POST", "/api/connections/codex/start", { returnTo: "http://127.0.0.1:3000/setup" },
+    );
+    equal(result.status, 200, "the local OAuth handoff starts");
+    equal(new URL(result.body.url).hostname, "auth.openai.com", "the handoff targets OpenAI auth");
+    assert(result.body.state.length > 10, "the OAuth flow carries CSRF state");
+  } finally {
+    if (priorWebUrl === undefined) delete process.env.KAPI_WEB_URL;
+    else process.env.KAPI_WEB_URL = priorWebUrl;
+  }
+});
+
 await test("production observability and webhook routes fail closed without shared secrets", async () => {
   const priorNodeEnv = process.env.NODE_ENV;
   const priorMetrics = process.env.KAPI_METRICS_TOKEN;

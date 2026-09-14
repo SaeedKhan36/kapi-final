@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { ACCESS_COOKIE, Authenticator, REFRESH_COOKIE, WorkOSError } from "@kapi/identity";
+import { isAllowedWebOrigin } from "./web-url.ts";
 
 const b64 = (value: string) => Buffer.from(value).toString("base64url");
 const OAUTH_STATE_COOKIE = "kapi_oauth_state";
@@ -33,8 +34,13 @@ function verifyState(state: string): string {
 function safeReturnTo(value?: string): string {
   const configured = process.env.KAPI_WEB_URL ?? "http://localhost:5173";
   if (!value) return configured;
-  if (value.startsWith("/") && !value.startsWith("//")) return new URL(value, configured).toString();
-  try { if (new URL(value).origin === new URL(configured).origin) return value; } catch { /* invalid */ }
+  try {
+    const configuredUrl = new URL(configured);
+    const target = value.startsWith("/") && !value.startsWith("//")
+      ? new URL(value, configuredUrl)
+      : new URL(value);
+    if (isAllowedWebOrigin(target, configuredUrl)) return target.toString();
+  } catch { /* invalid */ }
   return configured;
 }
 
