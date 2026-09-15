@@ -50,8 +50,13 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Production dependency audit
         run: pnpm audit:prod
-      - name: DigitalOcean deployment contract
+      - name: Deployment contracts
         run: pnpm test:deployment
+      - name: Compile Azure infrastructure
+        run: |
+          az bicep install
+          az bicep build --file infra/azure/foundation.bicep --outfile /tmp/kapi-foundation.json
+          az bicep build --file infra/azure/apps.bicep --outfile /tmp/kapi-apps.json
       - name: Apply migrations as the schema writer
         run: NODE_ENV=production pnpm db:migrate
       - name: Typecheck
@@ -74,6 +79,10 @@ jobs:
         run: docker build --tag kapi:${{ github.sha }} .
       - name: Verify non-root runtime image
         run: test "$(docker image inspect kapi:${{ github.sha }} --format '{{.Config.User}}')" = "kapi"
+      - name: Azure web gateway container build
+        run: docker build --file Dockerfile.web --tag kapi-web:${{ github.sha }} .
+      - name: Verify non-root web image
+        run: test "$(docker image inspect kapi-web:${{ github.sha }} --format '{{.Config.User}}')" = "nginx"
 
   browser:
     runs-on: ubuntu-latest
