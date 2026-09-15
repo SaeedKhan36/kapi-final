@@ -59,8 +59,8 @@ or changed during this verification.
 
 1. A user must complete the OpenAI device authorization so Kapi can store an encrypted Codex
    subscription grant.
-2. A GitHub owner must install the Kapi GitHub App with Contents write access on the canary
-   repository and configure the signed webhook destination.
+2. A GitHub owner must install the Kapi GitHub App with Contents and Pull requests write access on
+   the canary repository and configure the signed webhook destination.
 3. After Azure deployment, configure the final WorkOS callback and GitHub webhook URLs,
    then verify login/refresh/logout over HTTPS.
 4. Run the authenticated production smoke test and one real Captain → Build → PR/CI → Review →

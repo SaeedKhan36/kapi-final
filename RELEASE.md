@@ -36,7 +36,7 @@ No Azure resources have been created by repository verification. Follow
 - [x] `pnpm release:preflight` passes for the API, operations worker, and web build.
 - [ ] WorkOS login, refresh, logout, and authenticated API access work through HTTPS.
 - [ ] A user can connect and revoke a real Codex subscription grant.
-- [ ] The GitHub App is installed with Contents write permission on the canary repository.
+- [ ] The GitHub App is installed with Contents and Pull requests write permissions on the canary repository.
 - [ ] Signed `check_run` or `check_suite` deliveries reach the Captain's inbox.
 - [x] The Daytona provider probe creates, executes in, and destroys a sandbox.
 - [ ] `pnpm release:staging` proves one real Captain → Build → PR/CI → Review → Captain run.

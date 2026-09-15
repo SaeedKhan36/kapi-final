@@ -99,7 +99,7 @@ await check("GitHub App installation", async () => {
   if (!ref) throw new Error("KAPI_RELEASE_GITHUB_REPO is not a valid GitHub owner/repository");
   const status = await new GitHubApp(config).installationStatus(ref);
   if (!status.installed) throw new Error(status.reason);
-  return `installed with Contents write on ${ref.owner}/${ref.repo}`;
+  return `installed with Contents and Pull requests write on ${ref.owner}/${ref.repo}`;
 });
 
 await check("Daytona worker provider", async () => {

@@ -23,6 +23,12 @@ export function decodeAppPrivateKey(value: string): string {
 
 export type GitHubAppConfig = { appId: string; privateKey: string };
 
+/** Permissions every repository token needs for the complete branch -> PR workflow. */
+export const GITHUB_APP_TOKEN_PERMISSIONS = {
+  contents: "write",
+  pull_requests: "write",
+} as const;
+
 export function readAppConfig(env: NodeJS.ProcessEnv = process.env): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID?.trim();
   const inline = env.GITHUB_APP_PRIVATE_KEY?.trim();
@@ -127,14 +133,17 @@ export class GitHubApp {
     }
 
     const installation = await res.json() as {
-      id: number; html_url?: string; permissions?: { contents?: string };
+      id: number;
+      html_url?: string;
+      permissions?: { contents?: string; pull_requests?: string };
     };
-    if (installation.permissions?.contents !== "write") {
+    const missing = requiredPermissionLabels(installation.permissions);
+    if (missing.length > 0) {
       return {
         installed: false,
         installUrl: trustedGithubUrl(installation.html_url) ?? await this.installUrl(),
         action: "configure",
-        reason: `The Kapi App lacks Contents write access on ${repoFullName(ref)}.`,
+        reason: `The Kapi App lacks ${missing.join(" and ")} on ${repoFullName(ref)}.`,
       };
     }
 
@@ -152,7 +161,7 @@ export class GitHubApp {
     return undefined;
   }
 
-  /** Mints a contents-write token narrowed to exactly one repository. */
+  /** Mints a branch-and-PR token narrowed to exactly one repository. */
   async tokenFor(ref: RepoRef): Promise<string> {
     assertRef(ref);
     const key = repoFullName(ref).toLowerCase();
@@ -168,7 +177,7 @@ export class GitHubApp {
       method: "POST",
       body: JSON.stringify({
         repositories: [ref.repo],
-        permissions: { contents: "write" },
+        permissions: GITHUB_APP_TOKEN_PERMISSIONS,
       }),
     }).catch((err) => {
       if (err instanceof GitHubApiError) throw new GitHubAppError(err.message);
@@ -212,6 +221,15 @@ function assertRef(ref: RepoRef) {
   if (!ref.owner || !ref.repo || /[\\/]/.test(ref.owner) || /[\\/]/.test(ref.repo)) {
     throw new GitHubAppError(`invalid GitHub repository "${ref.owner}/${ref.repo}"`);
   }
+}
+
+function requiredPermissionLabels(
+  permissions: { contents?: string; pull_requests?: string } | undefined,
+): string[] {
+  const missing: string[] = [];
+  if (permissions?.contents !== "write") missing.push("Contents write access");
+  if (permissions?.pull_requests !== "write") missing.push("Pull requests write access");
+  return missing;
 }
 
 const enc = encodeURIComponent;
