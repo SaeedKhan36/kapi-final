@@ -19,6 +19,7 @@
     "verify": "pnpm test:deployment && pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:control-plane && pnpm build:web",
     "test:deployment": "tsx scripts/test-digitalocean-spec.ts",
     "test:azure-gateway": "tsx scripts/test-azure-gateway.ts",
+    "deploy:azure": "./deploy/azure/deploy.sh",
     "test:operations": "tsx scripts/test-operations.ts",
     "test:smoke": "tsx scripts/smoke-production.ts",
     "test:runtime": "pnpm build:agent && pnpm build:control-plane && tsx scripts/test-runtime.ts",
