@@ -17,19 +17,19 @@ See [`VERIFICATION.md`](./VERIFICATION.md) for the recorded commands and counts.
 
 ## Current deployment gaps
 
-- [x] The DigitalOcean App Platform topology is committed in `.do/app.yaml`.
-- [ ] Student credit and account verification are active.
-- [ ] A production DigitalOcean Managed PostgreSQL cluster named `kapi-postgres` exists in the
-  app region, is bound through its private URL, and has the app as a trusted source.
-- [ ] Every `CHANGE_ME` placeholder is replaced through DigitalOcean's encrypted environment
-  editor; the API and worker share the same `KAPI_SECRET_KEY`.
-- [ ] The DigitalOcean app is created and its API, operations worker, migration job, and web
-  components are running the same current SHA.
-- [ ] Backups/point-in-time recovery, alert destinations, metrics scraping, and an
-  operator-tested isolated restore are configured.
+- [x] Azure Bicep provisions the VNet-integrated Container Apps environment, private PostgreSQL,
+  private DNS, Key Vault, managed identity, Container Registry, Log Analytics, private API,
+  dedicated operations worker, migration job, and public same-origin web gateway.
+- [x] `pnpm deploy:azure` validates local secrets, creates resources and images, runs migrations,
+  and waits for application readiness without committing or logging credential values.
+- [ ] Azure for Students and the target subscription are active with sufficient regional quotas.
+- [ ] The Azure deployment command has completed and every app/job runs the same current SHA.
+- [ ] The emitted WorkOS callback and GitHub webhook URLs are configured in their provider UIs.
+- [ ] Azure Monitor alerts, authenticated metrics scraping, an isolated restore, and rollback
+  evidence are configured and recorded.
 
-No DigitalOcean resources have been created yet. Follow [`DIGITALOCEAN.md`](./DIGITALOCEAN.md)
-after the student credit is active.
+No Azure resources have been created by repository verification. Follow
+[`AZURE.md`](./AZURE.md) after the subscription is active.
 
 ## Staging gates
 

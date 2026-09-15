@@ -35,8 +35,9 @@ Both the `Release candidate` workflow—including PostgreSQL 16, Chromium, compi
 Docker image jobs—and CodeQL passed for commit `4b1bd48` on 2026-09-15.
 
 All database-backed suites use independent in-memory PGlite databases or disposable
-`kapi_test_*` PostgreSQL schemas. They do not truncate the configured application schema. No
-DigitalOcean resource was created or changed during this verification.
+`kapi_test_*` PostgreSQL schemas. They do not truncate the configured application schema. Azure
+Bicep compilation and deployment contract tests are local/read-only; no Azure resource was created
+or changed during this verification.
 
 ## Gates that require account or deployed-environment authority
 
@@ -44,7 +45,7 @@ DigitalOcean resource was created or changed during this verification.
    subscription grant.
 2. A GitHub owner must install the Kapi GitHub App with Contents write access on the canary
    repository and configure the signed webhook destination.
-3. After DigitalOcean deployment, configure the final WorkOS callback and GitHub webhook URLs,
+3. After Azure deployment, configure the final WorkOS callback and GitHub webhook URLs,
    then verify login/refresh/logout over HTTPS.
 4. Run the authenticated production smoke test and one real Captain → Build → PR/CI → Review →
    Captain canary lifecycle.
@@ -52,5 +53,5 @@ DigitalOcean resource was created or changed during this verification.
    reconciliation rollout described in `OPERATIONS.md`.
 
 These are deliberately not marked as repository failures: they require the user's account
-authorization or a running DigitalOcean environment. Operational commands and required variables
-are documented in [`OPERATIONS.md`](./OPERATIONS.md).
+authorization or a running Azure environment. Operational commands and required variables are
+documented in [`AZURE.md`](./AZURE.md) and [`OPERATIONS.md`](./OPERATIONS.md).

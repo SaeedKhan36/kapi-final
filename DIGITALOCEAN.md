@@ -1,6 +1,7 @@
-# DigitalOcean deployment
+# DigitalOcean deployment (alternate target)
 
-The repository is prepared for a DigitalOcean-only production deployment. The source of truth
+Azure is the current primary production target; see [`AZURE.md`](./AZURE.md). This retained
+specification is an alternate deployment option. Its source of truth
 is [`.do/app.yaml`](./.do/app.yaml). It describes one App Platform application with:
 
 - a public API service running `apps/control-plane/dist/api.mjs`;

@@ -25,9 +25,9 @@ reason about — never as a killed run.
 ## Status: release-candidate engineering
 
 The adaptive fleet, queue, UI, setup flows and production operations primitives are
-implemented. Local and CI verification are defined; real staging integration evidence,
-deployment sign-off and production rollout remain separate gates and are not claimed by
-this document. See [ARCHITECTURE.md](./ARCHITECTURE.md),
+implemented. Azure infrastructure and deployment automation are committed; account activation,
+the live deployment, provider consent, staging evidence, and production sign-off remain operator
+gates. See [ARCHITECTURE.md](./ARCHITECTURE.md), [AZURE.md](./AZURE.md),
 [DEVELOPMENT.md](./DEVELOPMENT.md), and [OPERATIONS.md](./OPERATIONS.md).
 
 The Captain is a live agent, not a plan. It explores a repository, then delegates by calling
@@ -455,12 +455,11 @@ fresh-clone and CI commands. Requires Node 22+ and pnpm 10.30.0.
 - Implemented and locally verified: control plane, adaptive roles, queue recovery,
   setup/workbench UI, scheduling, accounting, reconciliation, browser E2E, compiled runtime,
   container build, dependency audit, and CodeQL gates.
-- DigitalOcean deployment topology is ready in [`.do/app.yaml`](./.do/app.yaml). Creating the
-  app, loading encrypted secrets, provisioning managed PostgreSQL, and recording live lifecycle
-  evidence remain operator steps. See [DIGITALOCEAN.md](./DIGITALOCEAN.md) and
-  [RELEASE.md](./RELEASE.md).
+- Azure Container Apps deployment is automated with Bicep, managed identity, Key Vault, private
+  PostgreSQL, a private API, a dedicated operations worker, a migration job, and a public
+  same-origin gateway. See [AZURE.md](./AZURE.md) and [RELEASE.md](./RELEASE.md).
 - Next integration gate: real WorkOS/Codex/GitHub/Daytona staging lifecycle evidence using
   `KAPI_SMOKE_REQUIRE_PRODUCTION=true pnpm test:smoke` after deployment.
-- Then: DigitalOcean staging, controlled production canaries/restore, and final GA hardening.
+- Then: controlled Azure canaries/restore, alerts, and final GA hardening.
 
 A run ends at an open pull request. **Merging is always a human decision.**

@@ -1,27 +1,30 @@
 # Production operations
 
-## DigitalOcean topology
+## Azure topology
 
-`.do/app.yaml` defines a DigitalOcean App Platform app backed by an existing production
-DigitalOcean Managed PostgreSQL cluster. It contains a public API service, a private operations
-worker, a pre-deploy migration job, and the static React UI. The API runs with
-`KAPI_OPERATIONS=off`; only the worker schedules,
-reaps, meters, reconciles, and provisions. Queue and scheduler claims are database-locked,
-and spawn/VM budgets use the run row as a cross-replica mutex, so a temporary second worker
-remains safe during a rolling deploy.
+`infra/azure/foundation.bicep` and `infra/azure/apps.bicep` define the primary production target.
+Azure Container Apps runs a public, non-root web gateway; a private API; a dedicated private
+operations worker; and a manual migration job. PostgreSQL Flexible Server has public networking
+disabled and uses a delegated subnet plus private DNS. Azure Key Vault supplies runtime secrets
+through a user-assigned managed identity, which also pulls images from Azure Container Registry.
 
-The compiled `node apps/control-plane/dist/migrate.mjs` entrypoint runs as App Platform's
-`PRE_DEPLOY` job and is the only production schema writer (`pnpm db:migrate` is the source
-checkout equivalent). API and worker startup call the connect/verify path: if the migration is
-missing they fail with an actionable readiness error instead of attempting DDL concurrently.
+The API runs with `KAPI_OPERATIONS=off`; only the worker schedules, reaps, meters, reconciles, and
+provisions. Queue and scheduler claims are database-locked, and spawn/VM budgets use the run row as
+a cross-replica mutex, so a temporary second worker remains safe during a rolling deploy.
 
-Set `VITE_API_URL`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, and
-`KAPI_ALLOWED_ORIGINS` to the final HTTPS service URLs. Configure the WorkOS callback as
-`$CONTROL_PLANE_PUBLIC_URL/auth/callback` and the GitHub webhook as
-`$CONTROL_PLANE_PUBLIC_URL/webhooks/github`.
+The deployment command explicitly starts compiled `node apps/control-plane/dist/migrate.mjs` as a
+manual Container Apps Job and accepts readiness only after the job succeeds. It is the only
+production schema writer (`pnpm db:migrate` is the source-checkout equivalent). API and worker
+startup call the connect/verify path: if a migration is missing, they fail with an actionable
+readiness error rather than attempting DDL concurrently.
 
-The exact account setup, secret ownership, creation command, and safe first rollout are in
-[`DIGITALOCEAN.md`](./DIGITALOCEAN.md).
+The web image is built with relative browser URLs and proxies API, auth, webhook, WebSocket,
+health, and metrics paths to the private API by Container Apps service name. Consequently WorkOS
+and GitHub use the one public web origin, while the API itself is not internet-addressable.
+
+The exact account setup, secret ownership, deployment command, and safe first rollout are in
+[`AZURE.md`](./AZURE.md). The previous DigitalOcean specification remains an alternate target but
+is not the current release path.
 
 Before starting each service, load that service's production environment and run its strict
 release preflight. This validates configuration and proves that the API can launch the pinned
@@ -51,7 +54,7 @@ is acceptable.
 | --- | --- |
 | API | `DATABASE_URL`, `KAPI_SECRET_KEY`, `KAPI_SESSION_SECRET`, `KAPI_ALLOWED_ORIGINS`, `KAPI_WEB_URL`, `CONTROL_PLANE_PUBLIC_URL`, `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `KAPI_METRICS_TOKEN`, and `KAPI_OPERATIONS=off` |
 | Worker | The same `DATABASE_URL` and `KAPI_SECRET_KEY`, plus `CONTROL_PLANE_PUBLIC_URL`, a unique `KAPI_PLANE_ID`, non-local `VM_PROVIDER`, and `DAYTONA_API_KEY` when the provider is Daytona |
-| Web build | `VITE_API_URL`, exactly matching `CONTROL_PLANE_PUBLIC_URL` |
+| Web build | No secret values; Azure builds with relative URLs and injects only the private API service name |
 
 `KAPI_RATE_LIMIT_SALT` is optional when `KAPI_SESSION_SECRET` is strong, and
 `KAPI_DAYTONA_CENTS_PER_HOUR` is required for authoritative VM-cost reporting. The complete
@@ -103,8 +106,8 @@ window.
 
 ## Backup and restore
 
-Enable DigitalOcean Managed PostgreSQL point-in-time recovery and take an on-demand backup before each
-migration. Quarterly, restore the newest backup into a separate database, run
+Set Azure PostgreSQL backup retention to the approved recovery window and take a backup before each
+material migration. Quarterly, restore the newest backup into a separate database, run
 `pnpm db:migrate`, then verify project/thread/run counts and a read-only `/ready` smoke test.
 Record the restore duration and any missing secrets; encrypted connection records require
 the matching `KAPI_SECRET_KEY`.
@@ -132,8 +135,8 @@ KAPI_SECRET_KEY=... pnpm release:verify-restore
 - Rotate `KAPI_SESSION_SECRET` by forcing all sessions to sign in again.
 - Rotate `KAPI_SECRET_KEY` only with an envelope re-encryption procedure; changing it alone
   makes stored secrets and Codex grants unreadable.
-- Rotate the GitHub webhook secret in GitHub and DigitalOcean in the same maintenance window.
-- Rotate WorkOS and Daytona credentials in their provider consoles, update DigitalOcean, and
+- Rotate the GitHub webhook secret in GitHub and Azure Key Vault in the same maintenance window.
+- Rotate WorkOS and Daytona credentials in their provider consoles, update Azure Key Vault, and
   restart both services.
 
 ## Alerts
