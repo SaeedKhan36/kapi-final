@@ -106,6 +106,71 @@ await test("a third-party model override cannot escape the Codex catalog", () =>
   delete process.env.KAPI_MODELS_CODING;
 });
 
+await test("Codex uses the Responses endpoint with subscription headers", async () => {
+  let requestUrl = "";
+  let requestHeaders = new Headers();
+  let requestBody: Record<string, unknown> = {};
+  const router = withCodex({
+    codexAccountId: "acct_1",
+    codexFetch: async (
+      input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1],
+    ) => {
+      requestUrl = String(input);
+      requestHeaders = new Headers(init?.headers);
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const usage = {
+        input_tokens: 1,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 1,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 2,
+      };
+      const events = [
+        {
+          type: "response.created",
+          response: {
+            id: "resp_1", created_at: Math.floor(Date.now() / 1_000),
+            model: "gpt-5.6-sol", service_tier: null,
+          },
+        },
+        {
+          type: "response.output_item.added", output_index: 0,
+          item: { type: "message", id: "msg_1", phase: null },
+        },
+        {
+          type: "response.output_text.delta", item_id: "msg_1",
+          output_index: 0, delta: "ok", logprobs: [],
+        },
+        {
+          type: "response.output_item.done", output_index: 0,
+          item: { type: "message", id: "msg_1", phase: null },
+        },
+        {
+          type: "response.completed",
+          response: {
+            incomplete_details: null, usage, reasoning: null, service_tier: null,
+          },
+        },
+      ];
+      const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    },
+  });
+
+  const result = await router.generate({ prompt: "hi", maxRetries: 0 });
+  equal(result.text, "ok", "Responses payload is decoded");
+  equal(requestUrl, "https://chatgpt.com/backend-api/codex/responses", "correct endpoint");
+  equal(requestHeaders.get("authorization"), "Bearer codex-bearer", "grant is a bearer token");
+  equal(requestHeaders.get("chatgpt-account-id"), "acct_1", "account id is forwarded");
+  equal(requestHeaders.get("originator"), "codex_cli_rs", "Codex client is identified");
+  equal(requestBody.model, "gpt-5.6-sol", "requested model is preserved");
+  equal(requestBody.store, false, "subscription requests are stateless");
+  equal(requestBody.stream, true, "subscription requests use streaming transport");
+  assert(!("max_output_tokens" in requestBody), "unsupported output cap is omitted");
+  assert(Array.isArray(requestBody.input), "Responses input format is used");
+  assert(!("messages" in requestBody), "Chat Completions format is absent");
+});
+
 /* ------------------------------------------------------------------ */
 
 group("failover");

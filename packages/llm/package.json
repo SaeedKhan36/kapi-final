@@ -6,7 +6,7 @@
   "main": "./src/index.ts",
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^3.0.40",
+    "@ai-sdk/openai": "^4.0.66",
     "@kapi/db": "workspace:*",
     "@kapi/identity": "workspace:*",
     "@kapi/protocol": "workspace:*",

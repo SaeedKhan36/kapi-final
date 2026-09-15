@@ -1,6 +1,6 @@
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { createOpenAI } from "@ai-sdk/openai";
 import {
-  generateObject, generateText,
+  generateObject, generateText, Output, streamText,
   type LanguageModel, type ModelMessage, type ToolSet,
 } from "ai";
 import { BudgetTracker, type Budget } from "./budget.ts";
@@ -21,6 +21,8 @@ export type RouterOptions = {
   onAttempt?: (log: AttemptLog) => void;
   /** Overrides model construction. Tests use it to force failures. */
   buildModel?: (candidate: Candidate, apiKey: string) => LanguageModel;
+  /** Overrides the Codex HTTP transport. Tests use it to verify the wire contract. */
+  codexFetch?: typeof globalThis.fetch;
   /**
    * Restricts the router to exactly one Codex model.
    */
@@ -67,6 +69,9 @@ const QUOTA_COOLDOWN_MS = Number(process.env.KAPI_QUOTA_COOLDOWN_MS ?? 15 * 60 *
  * whole run: no error, no log, nothing for the failover loop to react to.
  */
 const MODEL_CALL_TIMEOUT_MS = Number(process.env.KAPI_MODEL_CALL_TIMEOUT_MS ?? 120_000);
+
+/** ChatGPT's subscription-backed Codex endpoint is streaming-only and stateless. */
+const CODEX_PROVIDER_OPTIONS = { openai: { store: false } } as const;
 
 /**
  * A fresh timeout signal for one attempt, combined with the caller's if it
@@ -163,14 +168,16 @@ export class ModelRouter {
   #model(candidate: Candidate, apiKey: string): LanguageModel {
     if (this.opts.buildModel) return this.opts.buildModel(candidate, apiKey);
 
-    // A bearer from the subscription grant, not an API key. The endpoint
-    // speaks the OpenAI wire format used by the AI SDK adapter.
-    return createOpenAICompatible({
+    // A bearer from the subscription grant, not an API key. Codex exposes the
+    // Responses wire format; using the generic compatible provider here would
+    // incorrectly append /chat/completions.
+    return createOpenAI({
       name: "codex",
       baseURL: codexApiBase(),
       apiKey,
       headers: codexHeaders(this.opts.codexAccountId),
-    })(candidate.modelId);
+      fetch: this.opts.codexFetch,
+    }).responses(candidate.modelId);
   }
 
   #penalise(candidate: Candidate, kind: ReturnType<typeof classifyFailure>) {
@@ -265,6 +272,23 @@ export class ModelRouter {
   async generate(args: GenerateArgs) {
     const { tier = "coding", ...rest } = args;
     const { value, candidate } = await this.#withFailover(tier, async (model) => {
+      if (!this.opts.buildModel) {
+        // The subscription backend rejects max_output_tokens. Kapi still
+        // enforces the run-wide token budget from reported usage.
+        const { maxOutputTokens: _unsupportedOutputLimit, ...codexArgs } = rest;
+        const result = streamText({
+          ...codexArgs,
+          model,
+          abortSignal: callSignal(codexArgs.abortSignal),
+          providerOptions: CODEX_PROVIDER_OPTIONS,
+        } as Parameters<typeof streamText>[0]);
+        const [text, toolCalls, steps, usage, finishReason] = await Promise.all([
+          result.text, result.toolCalls, result.steps, result.usage, result.finishReason,
+        ]);
+        this.#record(usage);
+        return { text, toolCalls, steps, usage, finishReason };
+      }
+
       const result = await generateText({
         ...rest, model, abortSignal: callSignal(rest.abortSignal),
       } as Parameters<typeof generateText>[0]);
@@ -286,6 +310,27 @@ export class ModelRouter {
   ): Promise<{ object: T; provider: ProviderId; modelId: string }> {
     const { tier = "reasoning", ...rest } = args;
     const { value, candidate } = await this.#withFailover(tier, async (model) => {
+      if (!this.opts.buildModel) {
+        const {
+          schema, schemaName, schemaDescription,
+          maxOutputTokens: _unsupportedOutputLimit, ...callArgs
+        } = rest;
+        const result = streamText({
+          ...callArgs,
+          model,
+          abortSignal: callSignal(callArgs.abortSignal),
+          providerOptions: CODEX_PROVIDER_OPTIONS,
+          output: Output.object({
+            schema: schema as Parameters<typeof Output.object>[0]["schema"],
+            name: schemaName,
+            description: schemaDescription,
+          }),
+        } as Parameters<typeof streamText>[0]);
+        const [object, usage] = await Promise.all([result.output, result.usage]);
+        this.#record(usage);
+        return { object };
+      }
+
       const result = await generateObject({
         ...rest, model, abortSignal: callSignal(rest.abortSignal),
       } as Parameters<typeof generateObject>[0]);
