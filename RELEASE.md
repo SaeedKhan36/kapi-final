@@ -7,8 +7,8 @@ only when every required item has an evidence link or dated operator note.
 ## Repository gates
 
 - [x] Changes are committed and pushed to `main`.
-- [x] Hosted `Release candidate` and CodeQL workflows passed for commit `4b1bd48`, including the
-  PostgreSQL, Chromium, compiled-runtime, and Docker-image jobs.
+- [x] Hosted `Release candidate` and CodeQL workflows passed for Azure contract commit `78303a8`,
+  including Bicep compilation, PostgreSQL, Chromium, compiled-runtime, and both Docker-image jobs.
 - [x] PostgreSQL contention, fleet-budget races, deterministic UI checks, Chromium E2E,
   compiled-runtime smoke checks, dependency audit, and production builds passed.
 - [x] Local health, readiness, and authenticated-metrics smoke checks passed.

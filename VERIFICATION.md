@@ -2,6 +2,21 @@
 
 Repository verification was refreshed on 2026-09-15 after the final pre-deployment audit.
 
+The Azure deployment additions were verified on the same date:
+
+- `pnpm test:azure` passed the non-root same-origin gateway and the topology, managed-identity,
+  private-network, Key Vault, migration, worker-isolation, and safe-rollout contracts.
+- Bicep CLI `0.47.16` compiled both `infra/azure/foundation.bicep` and
+  `infra/azure/apps.bicep` without diagnostics.
+- `DATABASE_URL= pnpm verify`, `pnpm test:e2e`, `pnpm test:runtime`, `pnpm audit:prod`, and
+  `pnpm release:preflight` passed locally.
+- Hosted `Release candidate` run `34949575702` passed for commit `78303a8`, including PostgreSQL
+  concurrency, Azure Bicep compilation, both non-root production container builds, Chromium, and
+  compiled runtime checks. CodeQL also passed for that commit.
+- The read-only live readiness probe still reports exactly two owner-action gates: connect a Codex
+  grant and install the GitHub App on `SaeedKhan36/kapi-final`. PostgreSQL, WorkOS, Daytona, cost
+  accounting, production configuration, and Codex App Server checks pass.
+
 ## Completed repository and local-runtime gates
 
 - `DATABASE_URL= pnpm verify`
@@ -31,8 +46,9 @@ Repository verification was refreshed on 2026-09-15 after the final pre-deployme
   configuration. It currently reports exactly two unresolved account gates: no active Codex grant
   and no GitHub App installation on `SaeedKhan36/kapi-final`.
 
-Both the `Release candidate` workflow—including PostgreSQL 16, Chromium, compiled runtime, and
-Docker image jobs—and CodeQL passed for commit `4b1bd48` on 2026-09-15.
+Both the `Release candidate` workflow—including Azure deployment contracts/Bicep, PostgreSQL 16,
+Chromium, compiled runtime, and API/web Docker image jobs—and CodeQL passed for commit `78303a8` on
+2026-09-15.
 
 All database-backed suites use independent in-memory PGlite databases or disposable
 `kapi_test_*` PostgreSQL schemas. They do not truncate the configured application schema. Azure
