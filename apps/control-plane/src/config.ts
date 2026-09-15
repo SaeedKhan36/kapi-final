@@ -6,6 +6,26 @@ export function allowedOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
   return env.NODE_ENV === "production" ? [] : ["http://localhost:5173", "http://localhost:8787"];
 }
 
+/**
+ * Production accepts only the explicit allowlist. Development additionally
+ * accepts loopback origins because Vite selects the next free port when 3000
+ * is occupied (and browsers may spell the same host as localhost or 127.0.0.1).
+ */
+export function isAllowedBrowserOrigin(
+  origin: string, env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (allowedOrigins(env).some((allowed) => allowed.replace(/\/$/, "") === origin)) return true;
+  if (env.NODE_ENV === "production") return false;
+
+  try {
+    const url = new URL(origin);
+    return ["http:", "https:"].includes(url.protocol) &&
+      ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function validateProductionConfig(
   role: "api" | "worker" = "api", env: NodeJS.ProcessEnv = process.env,
 ): void {

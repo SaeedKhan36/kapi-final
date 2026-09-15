@@ -5,7 +5,7 @@ import { newId } from "@kapi/protocol";
 import type { Authenticator } from "@kapi/identity";
 import type { EventHub } from "./events.ts";
 import type { Store } from "./store.ts";
-import { allowedOrigins } from "./config.ts";
+import { isAllowedBrowserOrigin } from "./config.ts";
 
 /**
  * Live stream. `?runId=` scopes to one run, `?cursor=` resumes from a sequence
@@ -19,14 +19,12 @@ export function attachWebSocket(
   server: unknown, hub: EventHub, deps: { auth: Authenticator; store: Store },
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
-  const origins = allowedOrigins();
-
   (server as HttpServer).on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname !== "/ws") return reject(socket, 404, "not found");
       const origin = req.headers.origin;
-      if (origin && !origins.includes(origin)) return reject(socket, 403, "origin not allowed");
+      if (origin && !isAllowedBrowserOrigin(origin)) return reject(socket, 403, "origin not allowed");
       let principal;
       try { principal = await deps.auth.authenticate(req.headers.authorization, req.headers.cookie); }
       catch { return reject(socket, 401, "unauthenticated"); }

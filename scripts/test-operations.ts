@@ -12,7 +12,9 @@ import { Scheduler, nextOccurrence } from "../apps/control-plane/src/scheduler.t
 import { UsageAccounting } from "../apps/control-plane/src/accounting.ts";
 import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { createRunLifecycle } from "../apps/control-plane/src/run-lifecycle.ts";
-import { validateProductionConfig, validateReleaseConfig } from "../apps/control-plane/src/config.ts";
+import {
+  isAllowedBrowserOrigin, validateProductionConfig, validateReleaseConfig,
+} from "../apps/control-plane/src/config.ts";
 import { applyLocalDevelopmentDefaults } from "../apps/control-plane/src/local-dev.ts";
 import { evaluateLifecycle, validateStagingSetup } from "./staging-evidence.ts";
 import { RESTORE_TABLES, compareRestoreCounts, parseExpectedCounts } from "./restore-evidence.ts";
@@ -34,6 +36,32 @@ const project = await store.createProject({
 });
 
 group("database safety");
+
+await test("development accepts Vite fallback ports without weakening production origins", () => {
+  const development = {
+    NODE_ENV: "development", KAPI_ALLOWED_ORIGINS: "http://localhost:3000",
+  };
+  assert(
+    isAllowedBrowserOrigin("http://127.0.0.1:3001", development),
+    "an alternate loopback host and fallback port are accepted in development",
+  );
+  assert(
+    !isAllowedBrowserOrigin("https://attacker.example", development),
+    "a non-loopback development origin is rejected",
+  );
+
+  const production = {
+    NODE_ENV: "production", KAPI_ALLOWED_ORIGINS: "https://app.example.com",
+  };
+  assert(
+    isAllowedBrowserOrigin("https://app.example.com", production),
+    "the configured production origin is accepted",
+  );
+  assert(
+    !isAllowedBrowserOrigin("http://127.0.0.1:3001", production),
+    "loopback is not implicitly trusted in production",
+  );
+});
 
 await test("whole-database truncation requires an explicit external opt-in", async () => {
   let statements = 0;

@@ -19,7 +19,7 @@ import { RunService } from "./run-service.ts";
 import { createRunLifecycle } from "./run-lifecycle.ts";
 import { Scheduler } from "./scheduler.ts";
 import { createWebAuthRoutes } from "./web-auth.ts";
-import { allowedOrigins } from "./config.ts";
+import { isAllowedBrowserOrigin } from "./config.ts";
 import { log } from "./log.ts";
 import type { RequestTracker } from "./request-tracker.ts";
 import { RateLimiter, clientAddress } from "./rate-limiter.ts";
@@ -74,7 +74,6 @@ export function createApp(deps: {
   const scheduler = deps.scheduler ?? new Scheduler(handle, store, runService);
   const runLifecycle = createRunLifecycle({ handle, store });
   const app = new Hono<Env>();
-  const origins = allowedOrigins();
   const githubConfig = readAppConfig();
   const githubApp = deps.githubApp === undefined
     ? (githubConfig ? new GitHubApp(githubConfig) : null)
@@ -90,7 +89,7 @@ export function createApp(deps: {
   app.use("*", bodyLimit({ maxSize: Number(process.env.KAPI_MAX_BODY_BYTES ?? 2 * 1024 * 1024),
     onError: (c) => c.json({ error: "request body too large" }, 413) }));
   const browserCors = cors({
-    origin: (origin) => origins.includes(origin) ? origin : "",
+    origin: (origin) => isAllowedBrowserOrigin(origin) ? origin : "",
     credentials: true,
   });
   app.use("/api/*", browserCors);
@@ -107,7 +106,9 @@ export function createApp(deps: {
       new RegExp(`(?:^|;\\s*)${name}=`).test(cookie));
     if (!carriesSession) return next();
     const origin = c.req.header("origin");
-    if (!origin || !origins.includes(origin)) return c.json({ error: "origin not allowed" }, 403);
+    if (!origin || !isAllowedBrowserOrigin(origin)) {
+      return c.json({ error: "origin not allowed" }, 403);
+    }
     return next();
   };
   app.use("/api/*", requireCookieOrigin);
