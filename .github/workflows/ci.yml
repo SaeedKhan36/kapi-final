@@ -48,8 +48,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Production dependency audit
-        run: pnpm audit:prod
+      - name: Dependency audit (including build tools)
+        run: pnpm audit:all
       - name: Deployment contracts
         run: pnpm test:deployment
       - name: Compile Azure infrastructure

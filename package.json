@@ -41,7 +41,8 @@
     "build:control-plane": "pnpm --filter @kapi/control-plane build",
     "build:agent": "pnpm --filter @kapi/agent build",
     "probe:daytona": "tsx scripts/probe-daytona.ts",
-    "run:agent": "pnpm build:agent && tsx scripts/run-agent.ts"
+    "run:agent": "pnpm build:agent && tsx scripts/run-agent.ts",
+    "audit:all": "pnpm audit --audit-level=moderate"
   },
   "devDependencies": {
     "@hono/node-server": "^1.13.7",
@@ -58,11 +59,16 @@
     "@types/node": "^22.10.2",
     "ai": "^7.0.84",
     "drizzle-kit": "^0.31.10",
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.25.0",
     "tsx": "^4.19.2",
     "turbo": "^2.6.3",
     "typescript": "^5.7.2",
     "yaml": "^2.9.0",
     "zod": "^3.24.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild@<0.25.0": "^0.25.0"
+    }
   }
 }
