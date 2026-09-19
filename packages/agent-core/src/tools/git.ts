@@ -1,4 +1,5 @@
 import type { AgentTool, GitCredentials, ToolContext } from "../types.ts";
+import { quoteShell } from "./fs.ts";
 import { shell } from "./shell.ts";
 
 /**
@@ -58,7 +59,7 @@ export const gitCommitTool: AgentTool = {
 
     const commit = await shell(
       ctx.cwd,
-      `git commit -m ${JSON.stringify(message)} --no-verify`,
+      `git commit -m ${quoteShell(message)} --no-verify`,
     );
     if (commit.exitCode !== 0) {
       return { ok: false, output: `git commit failed:\n${commit.stderr || commit.stdout}` };
@@ -100,7 +101,7 @@ export const gitPushTool: AgentTool = {
     const remote = authedRemote(creds.repoUrl, creds.token);
     // The credential goes on the command line for one push and is never
     // written into .git/config, where it would persist in the VM image.
-    const res = await shell(ctx.cwd, `git push --set-upstream ${JSON.stringify(remote)} HEAD:${branch}`);
+    const res = await shell(ctx.cwd, `git push --set-upstream ${quoteShell(remote)} HEAD:${branch}`);
 
     const output = scrub(res.stderr || res.stdout, creds.token);
     if (res.exitCode !== 0) return { ok: false, output: `git push failed:\n${output}` };
@@ -130,7 +131,7 @@ export async function prepareRepo(
     ctx.log(`cloning ${repoUrl} (${base})`);
     const clone = await shell(
       ctx.cwd,
-      `git clone --depth 50 --branch ${JSON.stringify(base)} ${JSON.stringify(remote)} .`,
+      `git clone --depth 50 --branch ${quoteShell(base)} ${quoteShell(remote)} .`,
       600_000,
     );
     if (clone.exitCode !== 0) {
@@ -148,12 +149,12 @@ export async function prepareRepo(
   }
 
   const identity = creds?.identity ?? { name: "kapi-agent", email: "agent@kapi.local" };
-  await shell(ctx.cwd, `git config user.name ${JSON.stringify(identity.name)}`);
-  await shell(ctx.cwd, `git config user.email ${JSON.stringify(identity.email)}`);
+  await shell(ctx.cwd, `git config user.name ${quoteShell(identity.name)}`);
+  await shell(ctx.cwd, `git config user.email ${quoteShell(identity.email)}`);
   // Local to this clone, so a shared credential cache is never written.
   await shell(ctx.cwd, `git config credential.helper ""`);
 
-  const checkout = await shell(ctx.cwd, `git checkout -B ${JSON.stringify(branch)}`);
+  const checkout = await shell(ctx.cwd, `git checkout -B ${quoteShell(branch)}`);
   if (checkout.exitCode !== 0) {
     return { ok: false, branch, detail: checkout.stderr || checkout.stdout };
   }

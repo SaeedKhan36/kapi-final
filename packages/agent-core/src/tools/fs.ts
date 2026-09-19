@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
+import { lstatSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { AgentTool, ToolContext } from "../types.ts";
 
 const run = promisify(execFile);
+export const quoteShell = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
 
 /** Truncation guard. A 200k-line file in the transcript is a budget incident. */
 const MAX_OUTPUT = Number(process.env.KAPI_MAX_TOOL_OUTPUT ?? 20_000);
@@ -27,7 +29,18 @@ export function insideRepo(ctx: ToolContext, path: string): string {
   if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error(`path escapes the repository: ${path}`);
   }
-  return target;
+  const root = realpathSync(ctx.cwd);
+  // Reject symlinks in every existing component, including dangling links.
+  let current = root;
+  for (const part of rel.split("/").filter(Boolean)) {
+    current = resolve(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) throw new Error(`path escapes the repository through a symlink: ${path}`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+  return current;
 }
 
 export const listFiles: AgentTool = {
@@ -45,10 +58,10 @@ export const listFiles: AgentTool = {
       const dir = insideRepo(ctx, String(input.dir ?? "."));
       const { stdout } = await run("bash", [
         "-lc",
-        `find ${JSON.stringify(dir)} -type f ` +
+        `find ${quoteShell(dir)} -type f ` +
         `-not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' ` +
-        `| head -300 | sed "s|^${ctx.cwd}/||"`,
-      ], { maxBuffer: 8 * 1024 * 1024 });
+        `| head -300`,
+      ], { maxBuffer: 8 * 1024 * 1024, timeout: 10_000 });
       return { output: clamp(stdout.trim() || "(no files)") };
     } catch (err) {
       return { ok: false, output: `ERROR listing ${input.dir}: ${String(err)}` };
@@ -169,9 +182,9 @@ export const grepTool: AgentTool = {
         "-lc",
         `grep -rn --binary-files=without-match ` +
         `--exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist ` +
-        `-- ${JSON.stringify(String(input.pattern))} ${JSON.stringify(dir)} ` +
-        `| head -100 | sed "s|^${ctx.cwd}/||"`,
-      ], { maxBuffer: 8 * 1024 * 1024 });
+        `-- ${quoteShell(String(input.pattern))} ${quoteShell(dir)} ` +
+        `| head -100`,
+      ], { maxBuffer: 8 * 1024 * 1024, timeout: 10_000 });
       return { output: clamp(stdout.trim() || "(no matches)") };
     } catch {
       // grep exits 1 on no matches, which is not an error worth reporting as one.

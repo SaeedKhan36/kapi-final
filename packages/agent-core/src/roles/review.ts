@@ -3,7 +3,7 @@ import {
 } from "@kapi/protocol";
 import type { AgentTool } from "../types.ts";
 import { grepTool, listFiles, readFileTool } from "../tools/fs.ts";
-import { clamp } from "../tools/fs.ts";
+import { clamp, quoteShell } from "../tools/fs.ts";
 import { detectTestCommand, shell } from "../tools/shell.ts";
 
 /**
@@ -41,13 +41,13 @@ export const inspectDiffTool: AgentTool = {
 
     // The target branch was cloned directly. Fetch only the named base so a
     // shallow review checkout still has the comparison point it needs.
-    const fetched = await shell(ctx.cwd, `git fetch --quiet origin ${JSON.stringify(base)} --depth=100`);
+    const fetched = await shell(ctx.cwd, `git fetch --quiet origin ${quoteShell(base)} --depth=100`);
     if (fetched.exitCode !== 0) {
       return { ok: false, output: `ERROR fetching ${base}: ${clamp(fetched.stderr || fetched.stdout)}` };
     }
 
     const baseRef = "FETCH_HEAD";
-    const suffix = path ? ` -- ${JSON.stringify(path)}` : "";
+    const suffix = path ? ` -- ${quoteShell(path)}` : "";
     const [commits, stat, diff] = await Promise.all([
       shell(ctx.cwd, `git log --oneline --no-decorate ${baseRef}..HEAD`),
       shell(ctx.cwd, `git diff --stat ${baseRef}...HEAD${suffix}`),

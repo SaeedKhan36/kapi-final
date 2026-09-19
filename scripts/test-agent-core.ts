@@ -2,7 +2,7 @@ import { loadEnv } from "@kapi/env";
 loadEnv();
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, symlink, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -87,6 +87,18 @@ await test("a path escaping the repository is refused", async () => {
   const res = await readFileTool.run({ path: "../../../etc/passwd" }, ctx);
   equal(res.ok, false, "refused");
   assert(res.output.includes("escapes the repository"), `says why: ${res.output}`);
+});
+
+await test("file tools reject symlink traversal and shell substitutions stay literal", async () => {
+  const outside = await mkdtemp(join(tmpdir(), "kapi-outside-"));
+  await writeFile(join(outside, "secret"), "private");
+  await symlink(outside, join(repo, "escape"));
+  equal((await readFileTool.run({ path: "escape/secret" }, ctx)).ok, false, "read blocked");
+  equal((await writeFileTool.run({ path: "escape/new", content: "bad" }, ctx)).ok, false, "write blocked");
+  const marker = join(repo, "injected");
+  await grepTool.run({ pattern: `$(touch ${marker})` }, ctx);
+  await listFiles.run({ dir: `$(touch injected)` }, ctx);
+  assert(!(await access(marker).then(() => true, () => false)), "no shell substitution executed");
 });
 
 await test("edit_file requires the match to be unique", async () => {
