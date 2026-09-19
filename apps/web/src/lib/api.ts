@@ -46,6 +46,7 @@ export const api = {
   me: () => request<Principal>("GET", "/api/me"),
   setup: () => request<Setup>("GET", "/api/setup"),
   connections: () => request<Connection[]>("GET", "/api/connections"),
+  startGithubConnection: () => request<{ url: string }>("POST", "/api/connections/github/start"),
   startCodexConnection: () =>
     request<CodexDeviceLogin>("POST", "/api/connections/codex/start"),
   codexConnectionStatus: (loginId: string) =>

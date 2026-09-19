@@ -21,6 +21,38 @@ await test("production repository access fails closed without user authorization
   }
 });
 
+await test("repository access uses the human grant and denies read-only or revoked access", async () => {
+  const before = { ...process.env };
+  const savedFetch = globalThis.fetch;
+  let push = false;
+  let active = true;
+  try {
+    process.env.WORKOS_CLIENT_ID = "client_test";
+    process.env.WORKOS_API_KEY = "test-only-key";
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === "api.workos.com" && url.pathname === "/data-integrations/github/token") {
+        equal(JSON.parse(String(init?.body)).user_id, "user_owner", "grant belongs to project owner");
+        return Response.json({ active, access_token: { access_token: "human-grant" } });
+      }
+      equal(url.toString(), "https://api.github.com/repos/acme/private", "exact repository checked");
+      equal(new Headers(init?.headers).get("authorization"), "Bearer human-grant", "human identity proves authorization");
+      return Response.json({ permissions: { push } });
+    };
+    const check = () => requireRepositoryAccess("user_owner", { owner: "acme", repo: "private" });
+    assert(await check().then(() => false, () => true), "read-only access denied");
+    push = true;
+    await check();
+    active = false;
+    assert(await check().then(() => false, () => true), "revoked grant denied even after previous success");
+  } finally {
+    globalThis.fetch = savedFetch;
+    for (const key of ["WORKOS_CLIENT_ID", "WORKOS_API_KEY"]) {
+      if (before[key] === undefined) delete process.env[key]; else process.env[key] = before[key];
+    }
+  }
+});
+
 const originalFetch = globalThis.fetch;
 const privateKey = generateKeyPairSync("rsa", {
   modulusLength: 2048,

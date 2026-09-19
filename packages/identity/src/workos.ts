@@ -195,10 +195,9 @@ export class WorkOSAuth {
       active: boolean;
       error?: string;
       access_token?: { access_token?: string; missing_scopes?: string[] };
-    }>("/pipes/access_token", {
+    }>("/data-integrations/github/token", {
       method: "POST",
       body: JSON.stringify({
-        provider: "github",
         user_id: userId,
         ...(organizationId ? { organization_id: organizationId } : {}),
       }),

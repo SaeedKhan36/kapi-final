@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { DbHandle } from "@kapi/db";
-import type { Principal } from "@kapi/identity";
+import { readWorkOSConfig, WorkOSAuth, type Principal } from "@kapi/identity";
 import { loadGrant, markGrantRevoked } from "@kapi/llm";
 import type { CodexConnectionBroker } from "./codex-device-auth.ts";
 
@@ -12,6 +12,24 @@ export function createConnectionRoutes(deps: {
 }) {
   const { handle, codexDeviceAuth } = deps;
   const app = new Hono<Env>();
+
+  app.post("/api/connections/github/start", async (c) => {
+    const principal = c.get("principal");
+    const config = readWorkOSConfig();
+    if (!config || principal.via !== "workos") {
+      return c.json({ error: "sign in with WorkOS to connect GitHub" }, 401);
+    }
+    try {
+      const url = await new WorkOSAuth(config).githubAuthorizationUrl({
+        userId: principal.workosId,
+        returnTo: new URL("/setup", process.env.KAPI_WEB_URL ?? "http://localhost:3000").toString(),
+      });
+      if (new URL(url).protocol !== "https:") throw new Error("invalid provider redirect");
+      return c.json({ url });
+    } catch {
+      return c.json({ error: "GitHub connection could not start; check the WorkOS Pipes configuration" }, 502);
+    }
+  });
 
   app.get("/api/connections", async (c) => {
     const rows = await handle.raw<{

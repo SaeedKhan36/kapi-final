@@ -51,6 +51,18 @@ export function Setup({ principal }: { principal: Principal }) {
     }
   };
 
+  const connectGithub = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { url } = await api.startGithubConnection();
+      window.location.assign(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+
   const disconnect = async () => {
     setBusy(true);
     setError(null);
@@ -142,6 +154,16 @@ export function Setup({ principal }: { principal: Principal }) {
           </Card>
         </section>
       )}
+
+      <Card className="p-4">
+        <p className="text-sm font-medium">Repository access</p>
+        <p className="mt-1 mb-3 text-xs text-muted">
+          Connect your GitHub account to verify access to your repositories. The GitHub App must also be installed on each repository.
+        </p>
+        <Button disabled={busy || setup?.auth.mode !== "workos"} onClick={() => void connectGithub()}>
+          Connect GitHub
+        </Button>
+      </Card>
 
       <SecretManager scope="user" scopeId={principal.userId} title="User secrets" />
     </div>

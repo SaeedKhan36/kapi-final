@@ -194,13 +194,50 @@ await test("development mutations reject hostile browser origins without cookies
   equal(res.status, 403, "cross-site request cannot use the local dev identity");
 });
 
+await test("GitHub connection binds authorization to the signed-in user", async () => {
+  const previous = { ...process.env };
+  const originalFetch = globalThis.fetch;
+  try {
+    process.env.WORKOS_CLIENT_ID = "client_test";
+    process.env.WORKOS_API_KEY = "test-key";
+    process.env.KAPI_WEB_URL = "https://app.example.com";
+    globalThis.fetch = async (input, init) => {
+      equal(String(input), "https://api.workos.com/data-integrations/github/authorize", "WorkOS authorization endpoint");
+      const body = JSON.parse(String(init?.body));
+      equal(body.user_id, "user_signed_in", "identity comes from session");
+      equal(body.return_to, "https://app.example.com/setup", "return URL comes from server configuration");
+      return Response.json({ url: "https://api.workos.com/data-integrations/test/authorize-redirect" });
+    };
+    const signedIn = { mode: "workos", authenticate: async () => ({
+      userId: "usr_local", workosId: "user_signed_in", via: "workos",
+    }) } as unknown as Authenticator;
+    const githubApp = createApp({ handle, store, hub, auth: signedIn, githubApp: null });
+    const result = await githubApp.request("/api/connections/github/start", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "attacker_chosen_user", returnTo: "https://evil.example" }),
+    });
+    equal(result.status, 200, "returns a connection link");
+    equal(result.headers.get("cache-control"), "no-store", "authorization link cannot be cached");
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of ["WORKOS_CLIENT_ID", "WORKOS_API_KEY", "KAPI_WEB_URL"]) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+});
+
 await test("OAuth state is unique for each browser ceremony", async () => {
   const fakeAuth = { mode: "workos", authorizationUrl: (_uri: string, state: string) =>
     `https://auth.example.com/?state=${encodeURIComponent(state)}` } as unknown as Authenticator;
   const login = createApp({ handle, store, hub, auth: fakeAuth, githubApp: null });
   const first = await login.request("/auth/login");
   const second = await login.request("/auth/login");
-  assert(first.headers.get("location") !== second.headers.get("location"), "independent random states");
+  const nonce = (response: Response) => {
+    const state = new URL(response.headers.get("location")!).searchParams.get("state")!;
+    return JSON.parse(Buffer.from(state.split(".")[0]!, "base64url").toString()).nonce;
+  };
+  assert(typeof nonce(first) === "string" && nonce(first).length >= 32, "state carries a random nonce");
+  assert(nonce(first) !== nonce(second), "independent random states");
   equal(first.headers.get("cache-control"), "no-store", "login state must not be cached");
 });
 
