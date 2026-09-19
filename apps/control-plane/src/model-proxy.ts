@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { jsonSchema, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai";
 import type { DbHandle } from "@kapi/db";
 import {
-  GitHubApp, GitHubAppError, parseRepoUrl, readAppConfig,
+  GitHubApp, GitHubAppError, parseRepoUrl, readAppConfig, requireRepositoryAccess,
   type JobTokenClaims,
 } from "@kapi/identity";
 import {
@@ -248,6 +248,17 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         { error: "the GitHub App is not configured (set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY)" },
         404,
       );
+    }
+
+    // Revalidate the human's current access before using the shared App identity.
+    const owners = await handle.raw<{ workos_id: string }>(
+      `SELECT workos_id FROM users WHERE id=$1`, [ctx.userId],
+    );
+    try {
+      if (!owners[0]) throw new Error("owner missing");
+      await requireRepositoryAccess(owners[0].workos_id, ref);
+    } catch {
+      return c.json({ error: "connect GitHub with write access to this repository" }, 403);
     }
 
     let token: string;

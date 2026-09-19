@@ -1,3 +1,4 @@
+import { githubCredentialRemote } from "@kapi/protocol";
 import type { VmProvider } from "./types.ts";
 import { VmError } from "./types.ts";
 
@@ -16,16 +17,7 @@ export const DEFAULT_EXCLUDES = [
 
 /** Injects a token into an https remote without ever logging it. */
 export function authenticatedRemote(repoUrl: string, token?: string): string {
-  if (!token) return repoUrl;
-  try {
-    const u = new URL(repoUrl);
-    if (u.protocol !== "https:") return repoUrl;
-    u.username = "x-access-token";
-    u.password = token;
-    return u.toString();
-  } catch {
-    return repoUrl;
-  }
+  return token ? githubCredentialRemote(repoUrl, token) : repoUrl;
 }
 
 export const redact = (text: string, ...secrets: Array<string | undefined>): string =>

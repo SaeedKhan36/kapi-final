@@ -1,3 +1,4 @@
+import { githubCredentialRemote } from "@kapi/protocol";
 import type { AgentTool, GitCredentials, ToolContext } from "../types.ts";
 import { quoteShell } from "./fs.ts";
 import { shell } from "./shell.ts";
@@ -12,12 +13,7 @@ import { shell } from "./shell.ts";
  */
 
 /** Injects credentials into a remote URL for exactly one command. */
-function authedRemote(repoUrl: string, token: string): string {
-  const url = new URL(repoUrl);
-  url.username = "x-access-token";
-  url.password = token;
-  return url.toString();
-}
+const authedRemote = githubCredentialRemote;
 
 /** Redacts a token from anything about to be shown to a model or logged. */
 export const scrub = (text: string, token?: string): string =>
@@ -142,6 +138,16 @@ export async function prepareRepo(
     }
   }
 
+  // Cloning with credentials writes them into .git/config. Remove them before
+  // repository code or read-only agents can inspect the checkout.
+  if (creds && repoUrl) {
+    const clean = new URL(githubCredentialRemote(repoUrl, creds.token));
+    clean.username = "";
+    clean.password = "";
+    const reset = await shell(ctx.cwd, `git remote set-url origin ${quoteShell(clean.toString())}`);
+    if (reset.exitCode !== 0) return { ok: false, branch, detail: "could not clear clone credentials" };
+  }
+
   // A captain clones to read the code, never to change it. Leaving it on the
   // base branch means there is no branch for it to accidentally commit onto.
   if (opts.readOnly) {
@@ -163,11 +169,11 @@ export async function prepareRepo(
 
 /** Commits made on this branch since it diverged from the base. */
 export async function commitsOnBranch(cwd: string, base: string): Promise<string[]> {
-  const res = await shell(cwd, `git log --format=%h --no-merges origin/${base}..HEAD 2>/dev/null`);
+  const res = await shell(cwd, `git log --format=%h --no-merges ${quoteShell(`origin/${base}..HEAD`)} 2>/dev/null`);
   return res.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
 export async function changedFiles(cwd: string, base: string): Promise<string[]> {
-  const res = await shell(cwd, `git diff --name-only origin/${base}...HEAD 2>/dev/null`);
+  const res = await shell(cwd, `git diff --name-only ${quoteShell(`origin/${base}...HEAD`)} 2>/dev/null`);
   return res.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
 }

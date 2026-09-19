@@ -1,3 +1,4 @@
+import { parseGithubRepository, githubCredentialRemote } from "@kapi/protocol";
 import {
   AgentIdSchema, AgentRoleSchema, agentId, jobIdOf, newId,
   JobSpecSchema, JobResultSchema, JobStatusSchema, isJobTerminal, isJobLeased,
@@ -167,6 +168,17 @@ await test("a change request renders actionable instructions", () => {
   assert(text.includes("src/api.ts"), "names the file");
   assert(text.includes("check the bearer token"), "includes the suggestion");
   assert(!text.includes("spacing"), "omits non-blocking findings");
+});
+
+await test("GitHub credential routing rejects lookalike hosts and embedded URLs", () => {
+  for (const value of ["https://evilgithub.com/acme/repo", "https://evil.test/github.com/acme/repo", "https://github.com@evil.test/acme/repo", "https://github.com/acme/repo?redirect=evil", "http://github.com/acme/repo"]) {
+    equal(parseGithubRepository(value), null, "untrusted URL rejected");
+    let rejected = false;
+    try { githubCredentialRemote(value, "secret"); } catch { rejected = true; }
+    assert(rejected, "credentials cannot be attached");
+  }
+  equal(parseGithubRepository("https://github.com/acme/my.repo.git")?.repo, "my.repo", "dotted name preserved");
+  equal(new URL(githubCredentialRemote("git@github.com:acme/repo.git", "secret")).hostname, "github.com", "SSH converted to trusted HTTPS");
 });
 
 report();

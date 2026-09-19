@@ -1,8 +1,25 @@
 import { generateKeyPairSync } from "node:crypto";
-import { GitHubApp, GITHUB_APP_TOKEN_PERMISSIONS } from "@kapi/identity";
+import { GitHubApp, GITHUB_APP_TOKEN_PERMISSIONS, requireRepositoryAccess } from "@kapi/identity";
 import { assert, equal, group, report, test } from "./harness.ts";
 
 group("GitHub App repository tokens");
+
+await test("production repository access fails closed without user authorization", async () => {
+  const before = { ...process.env };
+  try {
+    process.env.NODE_ENV = "production";
+    delete process.env.WORKOS_CLIENT_ID;
+    delete process.env.WORKOS_API_KEY;
+    let denied = false;
+    try { await requireRepositoryAccess("user_other", { owner: "acme", repo: "private" }); }
+    catch { denied = true; }
+    assert(denied, "an App installation alone cannot authorize a user");
+  } finally {
+    for (const key of ["NODE_ENV", "WORKOS_CLIENT_ID", "WORKOS_API_KEY"]) {
+      if (before[key] === undefined) delete process.env[key]; else process.env[key] = before[key];
+    }
+  }
+});
 
 const originalFetch = globalThis.fetch;
 const privateKey = generateKeyPairSync("rsa", {

@@ -1,3 +1,4 @@
+import { parseGithubRepository as parseRepoUrl } from "@kapi/protocol";
 import type { AgentTool } from "../types.ts";
 import { branchName, scrub } from "./git.ts";
 import { shell } from "./shell.ts";
@@ -5,10 +6,7 @@ import { shell } from "./shell.ts";
 export type RepoRef = { owner: string; repo: string };
 
 /** Parses the GitHub repo out of a clone URL. Null for anything not GitHub. */
-export function parseRepoUrl(url: string): RepoRef | null {
-  const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?/i);
-  return m ? { owner: m[1]!, repo: m[2]! } : null;
-}
+export { parseGithubRepository as parseRepoUrl } from "@kapi/protocol";
 
 export async function openPullRequest(
   token: string,

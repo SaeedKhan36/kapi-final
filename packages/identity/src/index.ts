@@ -5,3 +5,4 @@ export * from "./job-token.ts";
 export * from "./types.ts";
 export * from "./github-api.ts";
 export * from "./github-app.ts";
+export * from "./repository-access.ts";
