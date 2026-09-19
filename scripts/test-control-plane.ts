@@ -177,13 +177,23 @@ await test("production cookie mutations require an allowed browser origin", asyn
     equal((await request()).status, 403, "missing origin is rejected");
     equal((await request("https://attacker.example")).status, 403, "cross-site origin is rejected");
     equal((await request("https://app.example.com")).status, 204, "configured web origin is accepted");
-    equal((await request(undefined, "Bearer api-token")).status, 204, "explicit bearer authority is accepted");
+    equal((await request(undefined, "Bearer api-token")).status, 403, "bearer header cannot bypass cookie-only auth route protection");
   } finally {
     if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = priorNodeEnv;
     if (priorOrigins === undefined) delete process.env.KAPI_ALLOWED_ORIGINS;
     else process.env.KAPI_ALLOWED_ORIGINS = priorOrigins;
   }
+});
+
+await test("OAuth state is unique for each browser ceremony", async () => {
+  const fakeAuth = { mode: "workos", authorizationUrl: (_uri: string, state: string) =>
+    `https://auth.example.com/?state=${encodeURIComponent(state)}` } as unknown as Authenticator;
+  const login = createApp({ handle, store, hub, auth: fakeAuth, githubApp: null });
+  const first = await login.request("/auth/login");
+  const second = await login.request("/auth/login");
+  assert(first.headers.get("location") !== second.headers.get("location"), "independent random states");
+  equal(first.headers.get("cache-control"), "no-store", "login state must not be cached");
 });
 
 await test("rate limiting is shared across instances and ignores spoofed proxy prefixes", async () => {

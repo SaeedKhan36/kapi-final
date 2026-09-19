@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { ACCESS_COOKIE, Authenticator, REFRESH_COOKIE, WorkOSError } from "@kapi/identity";
@@ -15,7 +15,7 @@ function sessionSecret(): string {
 }
 
 function signState(returnTo: string): string {
-  const payload = b64(JSON.stringify({ returnTo, expires: Date.now() + 10 * 60_000 }));
+  const payload = b64(JSON.stringify({ returnTo, nonce: randomBytes(32).toString("base64url"), expires: Date.now() + 10 * 60_000 }));
   const signature = createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
   return `${payload}.${signature}`;
 }

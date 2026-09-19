@@ -92,6 +92,9 @@ export function createApp(deps: {
     origin: (origin) => isAllowedBrowserOrigin(origin) ? origin : "",
     credentials: true,
   });
+  app.use("/api/*", async (c, next) => { c.header("cache-control", "no-store"); await next(); });
+  app.use("/auth/*", async (c, next) => { c.header("cache-control", "no-store"); await next(); });
+  app.use("/agent/*", async (c, next) => { c.header("cache-control", "no-store"); await next(); });
   app.use("/api/*", browserCors);
   app.use("/auth/*", browserCors);
   const requireCookieOrigin = async (c: Context, next: Next) => {
@@ -100,7 +103,7 @@ export function createApp(deps: {
     }
     // Bearer callers authenticate explicitly and are not subject to ambient
     // browser-cookie authority, so CSRF does not apply to them.
-    if (/^Bearer\s+\S+/i.test(c.req.header("authorization") ?? "")) return next();
+    if (c.req.path.startsWith("/api/") && /^Bearer\s+\S+/i.test(c.req.header("authorization") ?? "")) return next();
     const cookie = c.req.header("cookie") ?? "";
     const carriesSession = [ACCESS_COOKIE, REFRESH_COOKIE].some((name) =>
       new RegExp(`(?:^|;\\s*)${name}=`).test(cookie));
@@ -168,7 +171,7 @@ export function createApp(deps: {
         githubApp: Boolean(readAppConfig()),
         operations: process.env.KAPI_OPERATIONS === "off" ? "external-worker" : "in-process",
         vmProvider: deps.vmProvider ?? "none" });
-    } catch (err) { return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 503); }
+    } catch (err) { return c.json({ ok: false, error: "database unavailable" }, 503); }
   });
 
   app.get("/metrics", async (c) => {
