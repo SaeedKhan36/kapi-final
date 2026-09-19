@@ -62,6 +62,16 @@ function ctxFor(cwd: string, jobId = "job_test"): ToolContext {
 
 /* ------------------------------------------------------------------ */
 
+await test("shell output is bounded and descendant processes cannot defeat timeout", async () => {
+  const dir = await scratchRepo();
+  const loud = await shell(dir, `node -e 'process.stdout.write("x".repeat(2000000))'`);
+  assert(loud.stdout.length <= 1_048_576, "output memory is capped");
+  const start = Date.now();
+  const hung = await shell(dir, "sleep 30 & wait", 100);
+  equal(hung.exitCode, 124, "timeout is an explicit failure");
+  assert(Date.now() - start < 3000, "descendant pipes do not hold the tool open");
+});
+
 group("filesystem tools");
 
 const repo = await scratchRepo();

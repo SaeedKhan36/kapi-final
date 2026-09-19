@@ -189,6 +189,11 @@ await test("an evicted agent is told its lease is gone", async () => {
   await claim(handle, { vmId: "vm-first", jobId: job.id, leaseSeconds: 1 });
 
   await sleep(1200);
+  const expiredToken = mintJobToken({ jobId: job.id, runId: s.runId, vmId: "vm-first" });
+  const expired = await fetch(`${base}/agent/git-token`, {
+    headers: { authorization: `Bearer ${expiredToken}` },
+  });
+  equal(expired.status, 409, "expired leases lose authority before the reaper runs");
   await reap(handle);
   await claim(handle, { vmId: "vm-second", jobId: job.id });
 

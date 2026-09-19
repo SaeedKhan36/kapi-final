@@ -186,6 +186,14 @@ await test("production cookie mutations require an allowed browser origin", asyn
   }
 });
 
+await test("development mutations reject hostile browser origins without cookies", async () => {
+  const res = await app.request("/api/projects", {
+    method: "POST", headers: { origin: "https://attacker.example", "content-type": "text/plain" },
+    body: JSON.stringify({ name: "unwanted", repoUrl: "https://github.com/acme/repo" }),
+  });
+  equal(res.status, 403, "cross-site request cannot use the local dev identity");
+});
+
 await test("OAuth state is unique for each browser ceremony", async () => {
   const fakeAuth = { mode: "workos", authorizationUrl: (_uri: string, state: string) =>
     `https://auth.example.com/?state=${encodeURIComponent(state)}` } as unknown as Authenticator;
@@ -377,6 +385,17 @@ await test("cancelling a run cancels the captain's whole subtree", async () => {
 /* ------------------------------------------------------------------ */
 
 group("live stream");
+
+await test("websocket rejects oversized inbound frames", async () => {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = reject; });
+  const closed = new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => { socket.close(); reject(new Error("socket did not reject oversized frame")); }, 3000);
+    socket.onclose = (event) => { clearTimeout(timer); resolve(event.code); };
+  });
+  socket.send("x".repeat(20_000));
+  equal(await closed, 1009, "message size policy closes the connection");
+});
 
 await test("a websocket replays history then delivers new events live", async () => {
   const thread = await api<{ id: string }>("POST", `/api/projects/${projectId}/threads`, {});

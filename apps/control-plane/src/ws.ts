@@ -18,7 +18,7 @@ import { isAllowedBrowserOrigin } from "./config.ts";
 export function attachWebSocket(
   server: unknown, hub: EventHub, deps: { auth: Authenticator; store: Store },
 ): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
   (server as HttpServer).on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -43,7 +43,10 @@ export function attachWebSocket(
     const raw = Number(url.searchParams.get("cursor") ?? 0);
     const cursor = Number.isFinite(raw) && raw > 0 ? raw : 0;
 
-    const client = { id: newId("ws"), runId, send: (data: string) => socket.send(data) };
+    const client = { id: newId("ws"), runId, send: (data: string) => {
+      if (socket.bufferedAmount > 1024 * 1024) { socket.close(1013, "client too slow; reconnect with cursor"); return; }
+      if (socket.readyState === socket.OPEN) socket.send(data);
+    } };
     const remove = hub.add(client);
     socket.on("close", remove);
     socket.on("error", remove);

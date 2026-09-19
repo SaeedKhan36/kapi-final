@@ -53,7 +53,8 @@ export function createAgentApi(deps: {
     const { jobId, runId, vmId } = c.get("claims");
     const job = await getJob(handle, jobId);
     const active = job && job.runId === runId && job.vmId === vmId &&
-      (job.status === "claimed" || job.status === "running");
+      (job.status === "claimed" || job.status === "running") &&
+      job.leaseExpiresAt !== null && +job.leaseExpiresAt > Date.now();
     if (!active) {
       return c.json({ error: "job lease is no longer active" }, 409);
     }

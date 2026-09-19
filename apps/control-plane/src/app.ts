@@ -7,7 +7,7 @@ import type { DbHandle } from "@kapi/db";
 import {
   ACCESS_COOKIE, REFRESH_COOKIE, Authenticator, GitHubApp, WorkOSError,
   deleteSecret, listSecrets, parseRepoUrl, putSecret,
-  readAppConfig, vaultConfigured, type Principal, type SecretScope,
+  readAppConfig, requireRepositoryAccess, vaultConfigured, type Principal, type SecretScope,
 } from "@kapi/identity";
 import { getJob, listJobs } from "@kapi/queue";
 import type { Store } from "./store.ts";
@@ -98,9 +98,12 @@ export function createApp(deps: {
   app.use("/api/*", browserCors);
   app.use("/auth/*", browserCors);
   const requireCookieOrigin = async (c: Context, next: Next) => {
-    if (process.env.NODE_ENV !== "production" || ["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
-      return next();
+    if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return next();
+    const requestOrigin = c.req.header("origin");
+    if (requestOrigin && !isAllowedBrowserOrigin(requestOrigin)) {
+      return c.json({ error: "origin not allowed" }, 403);
     }
+    if (process.env.NODE_ENV !== "production") return next();
     // Bearer callers authenticate explicitly and are not subject to ambient
     // browser-cookie authority, so CSRF does not apply to them.
     if (c.req.path.startsWith("/api/") && /^Bearer\s+\S+/i.test(c.req.header("authorization") ?? "")) return next();
@@ -116,12 +119,13 @@ export function createApp(deps: {
   };
   app.use("/api/*", requireCookieOrigin);
   app.use("/auth/*", requireCookieOrigin);
-  app.use("/api/*", async (c, next) => {
+  const rateLimit = async (c: Context, next: Next) => {
     const decision = await rate.consume(clientAddress({ get: (name) => c.req.header(name) }));
     c.header("ratelimit-limit", String(decision.limit));
     c.header("ratelimit-remaining", String(decision.remaining));
     c.header("ratelimit-reset", String(Math.ceil(+decision.resetAt / 1000)));
     if (!decision.allowed) {
+      c.header("retry-after", String(Math.max(1, Math.ceil((+decision.resetAt - Date.now()) / 1000))));
       return c.json({ error: "rate limit exceeded" }, 429);
     }
     const requestId = c.req.header("x-request-id") ?? crypto.randomUUID();
@@ -133,7 +137,9 @@ export function createApp(deps: {
     log("info", "http.request", { requestId, method: c.req.method,
       path: c.req.path, status: c.res.status, durationMs: Date.now() - started,
       ...(runId ? { runId } : {}), ...(jobId ? { jobId } : {}) });
-  });
+  };
+  app.use("/api/*", rateLimit);
+  app.use("/auth/*", rateLimit);
 
   app.route("/", createWebAuthRoutes(auth));
 
@@ -269,6 +275,12 @@ export function createApp(deps: {
   app.post("/api/projects", async (c) => {
     const parsed = CreateProject.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: "invalid request", issues: parsed.error.issues }, 400);
+    if (process.env.NODE_ENV === "production") {
+      const ref = parseRepoUrl(parsed.data.repoUrl);
+      if (!ref) return c.json({ error: "a GitHub HTTPS repository URL is required" }, 400);
+      try { await requireRepositoryAccess(c.get("principal").workosId, ref); }
+      catch { return c.json({ error: "connect GitHub with write access to this repository" }, 403); }
+    }
     const project = await store.createProject({
       ownerId: c.get("principal").userId, ...parsed.data,
     });

@@ -13,6 +13,7 @@ export function shell(
   return new Promise((resolveShell) => {
     const child = spawn("bash", ["-lc", command], {
       cwd,
+      detached: process.platform !== "win32",
       env: { ...process.env, CI: "1", GIT_TERMINAL_PROMPT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -31,11 +32,15 @@ export function shell(
     // whole job until its lease expires.
     const timer = setTimeout(() => {
       stderr += `\n[kapi] command exceeded ${timeoutMs}ms and was killed\n`;
-      child.kill("SIGKILL");
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch { /* child may have exited between the timer and the signal */ }
+      finish(124);
     }, timeoutMs);
 
-    child.stdout.on("data", (d) => { stdout += String(d); });
-    child.stderr.on("data", (d) => { stderr += String(d); });
+    child.stdout.on("data", (d) => { stdout = (stdout + String(d)).slice(-1_048_576); });
+    child.stderr.on("data", (d) => { stderr = (stderr + String(d)).slice(-1_048_576); });
     child.on("error", (err) => { stderr += String(err); finish(127); });
     child.on("close", (code) => finish(code ?? 0));
   });
