@@ -32,7 +32,7 @@ const app = createApp({
 const operations = provisioner ? startOperations({ handle, store, hub, provisioner }) : null;
 
 const port = Number(process.env.PORT ?? process.env.CONTROL_PLANE_PORT ?? 8787);
-const server = serve({ fetch: app.fetch, port, hostname: process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1" }, () => {
+const server = serve({ fetch: app.fetch, port, hostname: process.env.CONTROL_PLANE_HOST ?? (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1") }, () => {
   console.log(`\n  kapi control plane`);
   console.log(`  http  http://localhost:${port}`);
   console.log(`  ws    ws://localhost:${port}/ws`);

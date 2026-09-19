@@ -24,6 +24,9 @@ reason about — never as a killed run.
 
 ## Status: release-candidate engineering
 
+The 2026-09-19 security hardening, verification evidence, and remaining deployment gates
+are recorded in [SECURITY_REVIEW.md](./SECURITY_REVIEW.md).
+
 The adaptive fleet, queue, UI, setup flows and production operations primitives are
 implemented. Azure infrastructure and deployment automation are committed; account activation,
 the live deployment, provider consent, staging evidence, and production sign-off remain operator
@@ -166,8 +169,10 @@ from `KAPI_SECRET_KEY`, name exactly one job, and expire.
 
 Set `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` and install the App on each project
 repository with **Contents: read and write** permission. Git operations receive a one-hour
-installation token narrowed to that repository; the control plane no longer reads or hands
-out a raw `GITHUB_TOKEN`.
+installation token narrowed to that repository. In production, the user must first connect
+GitHub from Setup through WorkOS Pipes; project creation and each credential request verify
+the user's current repository write access. An installation does not authorize every Kapi user;
+the control plane no longer reads or hands out a raw `GITHUB_TOKEN`.
 
 Point the App's webhook URL at `POST /webhooks/github` and subscribe to **Check run** and
 **Check suite**. Completed checks are correlated by the `kapi/<jobId>` branch, appended as

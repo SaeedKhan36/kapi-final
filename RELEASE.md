@@ -4,7 +4,20 @@ This checklist separates evidence produced by the repository from actions that r
 access to the deployment and provider accounts. A release is ready for general availability
 only when every required item has an evidence link or dated operator note.
 
-## Repository gates
+## Current security hardening revision
+
+See [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) for the 2026-09-19 changes and local evidence.
+
+- [ ] Push the hardening revision and obtain fresh hosted CI, CodeQL and container-scan results.
+- [ ] Enable WorkOS Pipes GitHub and verify Setup → Connect GitHub for a real user.
+- [ ] Verify that a second user without repository write access cannot create a production
+  project for that repository or obtain its App credentials.
+- [ ] Complete the HTTPS/provider lifecycle, isolation, restore and rollback gates below
+  on the exact revision intended for production.
+
+## Previous repository evidence
+
+These historical checks do not certify the current hardening revision.
 
 - [x] Changes are committed and pushed to `main`.
 - [x] Hosted `Release candidate` and CodeQL workflows passed for Azure contract commit `78303a8`,
