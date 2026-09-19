@@ -91,7 +91,7 @@ export class DaytonaProvider implements VmProvider {
       this.#boxes.set(id, { handle, box });
       return box;
     } catch (cause) {
-      throw new VmError(`failed to create vm: ${String(cause)}`, this.name, cause);
+      throw new VmError("failed to create vm; inspect Daytona diagnostics", this.name);
     }
   }
 

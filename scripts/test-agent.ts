@@ -280,6 +280,24 @@ await test("only requested vault secrets reach a worker, with narrowest scope wi
   assert(!JSON.stringify(job.payload).includes("task-value"), "plaintext is never persisted in the job");
 });
 
+await test("provider failures cannot leak injected secrets into control-plane errors", async () => {
+  const seeded = await seedRun(handle);
+  const job = await echoJob(seeded.runId);
+  class FailingProvider extends LocalProvider {
+    override async create(_spec: VmSpec): Promise<Vm> {
+      throw new Error("docker run -e TOKEN=private-provider-credential");
+    }
+  }
+  const failing = new Provisioner(handle, {
+    provider: new FailingProvider(), publicUrl: base, runId: seeded.runId, onLog: () => {},
+  });
+  let error: unknown;
+  try { await failing.provision(job); } catch (caught) { error = caught; }
+  assert(error instanceof Error, "failure is propagated");
+  assert(!String(error).includes("private-provider-credential"), "provider request data is not exposed");
+  assert(!(error as Error).cause, "raw provider error is not retained in the cause chain");
+});
+
 await test("the provisioner starts an agent that runs the job to completion", async () => {
   const s = await seedRun(handle);
   const job = await echoJob(s.runId, { instruction: "prove the bootstrap works" });

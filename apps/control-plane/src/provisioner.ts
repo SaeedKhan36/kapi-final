@@ -284,7 +284,8 @@ export class Provisioner {
       });
     } catch (err) {
       await this.#release(job.id, "provision-failed");
-      throw err;
+      // Provider errors may contain request bodies or CLI arguments with secrets.
+      throw new Error(`VM provisioning failed (${this.#provider.name}); inspect provider-side diagnostics`);
     }
 
     // A different plane may have timed this reservation out while create()
@@ -325,7 +326,7 @@ export class Provisioner {
       await this.#provider.destroy(vm.id).catch(() => {});
       this.#started.delete(job.id);
       await this.#release(job.id, "agent-start-failed");
-      throw err;
+      throw new Error(`Agent startup failed (${this.#provider.name}); inspect provider-side diagnostics`);
     }
 
     this.#log(`${job.kind}/${job.role} ${job.id} -> ${this.#provider.name} vm ${vm.id}`);

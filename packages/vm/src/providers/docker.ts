@@ -58,7 +58,7 @@ export class DockerProvider implements VmProvider {
       this.#boxes.set(id, box);
       return box;
     } catch (cause) {
-      throw new VmError(`docker run failed: ${String(cause)}`, this.name, cause);
+      throw new VmError("docker run failed; inspect Docker daemon diagnostics", this.name);
     }
   }
 
