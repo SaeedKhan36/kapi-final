@@ -55,3 +55,10 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: A Kapi run exhausted a configured budget
+
+      - alert: KapiVmCleanupFailed
+        expr: kapi_vm_cleanup_failures > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: VM deletion failed; resource references are retained for retry

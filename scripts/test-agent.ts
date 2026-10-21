@@ -444,12 +444,29 @@ await test("a finished job's VM is reclaimed", async () => {
   await provisioner.reclaim();
   const leaked = await handle.raw<{ n: string }>(
     `SELECT count(*)::text AS n FROM agents a JOIN jobs j ON j.id = a.job_id
-     WHERE a.vm_id IS NOT NULL AND j.status IN ('succeeded','failed','cancelled')`,
+     WHERE a.vm_id IS NOT NULL AND a.provider='local' AND j.status IN ('succeeded','failed','cancelled')`,
   );
   equal(Number(leaked[0]!.n), 0, "no VM is left attached to a finished job");
 });
 
 /* ------------------------------------------------------------------ */
+
+await test("failed provider deletion retains its reference and succeeds on a later reclaim", async () => {
+  const s = await seedRun(handle);
+  const job = await echoJob(s.runId);
+  await handle.raw(`UPDATE jobs SET status='failed' WHERE id=$1`, [job.id]);
+  await handle.raw(`INSERT INTO agents(job_id,run_id,role,status,vm_id,provider,stopped_at)
+    VALUES($1,$2,'backend','failed','retry-resource','fake',now())`, [job.id,s.runId]);
+  let attempts = 0;
+  const fake = { name: "fake", destroyOrphan: async () => ++attempts > 1 } as unknown as VmProvider;
+  const p = new Provisioner(handle, { provider: fake });
+  await p.reclaim();
+  const failed = await handle.raw<{vm_id:string;cleanup_attempts:number}>(`SELECT vm_id,cleanup_attempts FROM agents WHERE job_id=$1`, [job.id]);
+  equal(failed[0]?.vm_id, "retry-resource"); equal(failed[0]?.cleanup_attempts, 1);
+  await p.reclaim();
+  const done = await handle.raw<{vm_id:string|null}>(`SELECT vm_id FROM agents WHERE job_id=$1`, [job.id]);
+  equal(done[0]?.vm_id, null);
+});
 
 group("surviving a lost VM");
 

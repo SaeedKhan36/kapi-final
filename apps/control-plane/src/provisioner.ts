@@ -395,8 +395,7 @@ export class Provisioner {
       const direct = await this.#provider.destroy(vmId).then(() => true).catch(() => false);
       if (direct) return true;
     }
-    const orphan = await this.#provider.destroyOrphan?.(vmId).catch(() => false);
-    if (orphan) return true;
+    if (this.#provider.destroyOrphan) return this.#provider.destroyOrphan(vmId).catch(() => false);
     if (!ownedHere) {
       return this.#provider.destroy(vmId).then(() => true).catch(() => false);
     }
@@ -429,16 +428,28 @@ export class Provisioner {
       `SELECT a.job_id, a.vm_id FROM agents a
        JOIN jobs j ON j.id = a.job_id
        WHERE a.vm_id IS NOT NULL AND a.stopped_at IS NOT NULL
-         AND j.status IN ('succeeded','failed','cancelled')`,
+         AND j.status IN ('succeeded','failed','cancelled') AND a.provider=$1`,
+      [this.#provider.name],
     );
     let destroyed = 0;
     for (const row of rows) {
       // After a process restart the provider may have no in-memory handle for
       // this id, so use its reattachment path instead of accepting a no-op
       // destroy as success.
-      if (await this.#destroyVm(row.job_id, row.vm_id)) destroyed++;
-      await this.handle.raw(`UPDATE agents SET vm_id = NULL WHERE job_id = $1`, [row.job_id]);
-      this.#started.delete(row.job_id);
+      if (await this.#destroyVm(row.job_id, row.vm_id)) {
+        destroyed++;
+        await this.handle.raw(
+          `UPDATE agents SET vm_id=NULL,cleanup_error=NULL WHERE job_id=$1 AND vm_id=$2 AND stopped_at IS NOT NULL`,
+          [row.job_id, row.vm_id],
+        );
+        this.#started.delete(row.job_id);
+      } else {
+        await this.handle.raw(
+          `UPDATE agents SET cleanup_attempts=cleanup_attempts+1,cleanup_error='provider deletion not confirmed'
+           WHERE job_id=$1 AND vm_id=$2`, [row.job_id, row.vm_id],
+        );
+        log("warn", "vm.cleanup_failed", { jobId: row.job_id, vmId: row.vm_id, provider: this.#provider.name });
+      }
     }
     return destroyed;
   }

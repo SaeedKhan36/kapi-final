@@ -73,6 +73,10 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS api_rate_limits_bucket_idx ON api_rate_limits (bucket_start);
     `,
   },
+  { version: 3, name: "cleanup-retry-evidence", sql: `
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS cleanup_attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS cleanup_error TEXT;
+  ` },
 ];
 
 export async function runMigrations(handle: DbHandle): Promise<void> {

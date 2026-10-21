@@ -196,6 +196,8 @@ export const agents = pgTable(
     lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+    cleanupAttempts: integer("cleanup_attempts").notNull().default(0),
+    cleanupError: text("cleanup_error"),
     accountedThrough: timestamp("accounted_through", { withTimezone: true }),
   },
   (t) => [index("agents_run_idx").on(t.runId, t.status)],
