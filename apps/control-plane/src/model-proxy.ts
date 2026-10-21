@@ -1,3 +1,4 @@
+import { reserveModelCall, settleModelCall, ModelAdmissionError, positiveLimit } from "./model-admission.ts";
 import { Hono } from "hono";
 import { jsonSchema, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai";
 import type { DbHandle } from "@kapi/db";
@@ -82,28 +83,16 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       return c.json({ error: "job is no longer running" }, 409);
     }
 
-    // Checked here, before the call, because the point of a budget is to not
-    // make the request that crosses the line.
-    if (ctx.llmRequests >= ctx.maxRequests || ctx.llmTokens >= ctx.maxTokens) {
-      return c.json(
-        {
-          error: `run budget exhausted (${ctx.llmRequests}/${ctx.maxRequests} requests, ` +
-                 `${ctx.llmTokens}/${ctx.maxTokens} tokens)`,
-          budgetExhausted: true,
-        },
-        429,
-      );
-    }
-
-    // Reserve the request atomically. Many agents can call at once; a read then
-    // increment would let all of them cross the same final-request boundary.
-    const reserved = await handle.raw<{ llm_requests: number }>(
-      `UPDATE runs SET llm_requests=llm_requests+1
-       WHERE id=$1 AND llm_requests < max_llm_requests AND llm_tokens < max_tokens
-       RETURNING llm_requests`, [runId],
-    );
-    if (reserved.length === 0) {
-      return c.json({ error: "run model budget exhausted", budgetExhausted: true }, 429);
+    // Reserve a conservative input-byte bound plus output allowance before dispatch.
+    // The Codex backend does not accept an output cap: a single response may still exceed this allowance.
+    const tokenAllowance = Buffer.byteLength(JSON.stringify(parsed.data)) +
+      positiveLimit(process.env.KAPI_MODEL_OUTPUT_RESERVATION_TOKENS, 64_000);
+    let reservation;
+    try { reservation = await reserveModelCall(handle, runId, ctx.userId, tokenAllowance); }
+    catch (err) {
+      if (!(err instanceof ModelAdmissionError)) throw err;
+      if (err.busy) c.header("Retry-After", "2");
+      return c.json({ error: err.message, retryable: err.busy, budgetExhausted: !err.busy }, 429);
     }
 
     const tools: ToolSet = {};
@@ -144,10 +133,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         outputTokens: result.usage?.outputTokens ?? 0,
         totalTokens: result.usage?.totalTokens ?? 0,
       };
-      await handle.raw(
-        `UPDATE runs SET llm_tokens = llm_tokens + $2 WHERE id = $1`,
-        [runId, usage.totalTokens],
-      );
+      await settleModelCall(handle, reservation.id, usage.totalTokens);
 
       const response: ModelResponse = {
         text: result.text ?? "",
@@ -162,10 +148,11 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         usage,
         provider: result.provider,
         modelId: result.modelId,
-        budgetExhausted: Number(reserved[0]!.llm_requests) >= ctx.maxRequests,
+        budgetExhausted: ctx.llmRequests + 1 >= ctx.maxRequests,
       };
       return c.json(response);
     } catch (err) {
+      await settleModelCall(handle, reservation.id);
       if (err instanceof BudgetExceededError) {
         return c.json({ error: err.message, budgetExhausted: true }, 429);
       }

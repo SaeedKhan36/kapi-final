@@ -214,6 +214,6 @@ CREATE INDEX IF NOT EXISTS api_rate_limits_bucket_idx ON api_rate_limits (bucket
 
 /** Every table, in dependency order for TRUNCATE. */
 export const TABLES = [
-  "events", "artifacts", "usage_ledger", "agents", "jobs", "runs", "messages", "threads",
+  "model_reservations", "events", "artifacts", "usage_ledger", "agents", "jobs", "runs", "messages", "threads",
   "schedules", "projects", "connections", "secrets", "api_rate_limits", "users",
 ] as const;

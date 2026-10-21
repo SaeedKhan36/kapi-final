@@ -50,6 +50,10 @@ export class PlaneClient {
         });
         const text = await res.text();
 
+        if (res.status === 429 && path === "/agent/model") {
+          const detail = JSON.parse(text) as { retryable?: boolean };
+          if (detail.retryable) { lastError = "model capacity busy"; continue; }
+        }
         // 4xx is our mistake or an expired token; retrying cannot fix it.
         if (res.status >= 400 && res.status < 500) {
           throw new Error(`${res.status} ${path}: ${text.slice(0, 300)}`);

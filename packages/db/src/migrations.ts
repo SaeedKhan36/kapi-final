@@ -77,6 +77,17 @@ export const MIGRATIONS: readonly Migration[] = [
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS cleanup_attempts INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS cleanup_error TEXT;
   ` },
+  { version: 4, name: "model-admission-reservations", sql: `
+    CREATE TABLE IF NOT EXISTS admission_locks (id TEXT PRIMARY KEY);
+    INSERT INTO admission_locks(id) VALUES('model'),('vm') ON CONFLICT DO NOTHING;
+    CREATE TABLE IF NOT EXISTS model_reservations (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tokens INTEGER NOT NULL CHECK(tokens>0), expires_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS model_reservations_run_idx ON model_reservations(run_id);
+    CREATE INDEX IF NOT EXISTS model_reservations_user_idx ON model_reservations(user_id,expires_at);
+  ` },
 ];
 
 export async function runMigrations(handle: DbHandle): Promise<void> {

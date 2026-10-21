@@ -171,3 +171,18 @@ not enable general availability unless it passes, all alert rules remain quiet, 
 inventory contains no unowned VM, and reconciliation has completed at least one full orphan
 grace window in audit-only mode. Record the commit, run ID, pull request, CI delivery, start
 and finish time, and operator in [`RELEASE.md`](./RELEASE.md).
+
+### Model admission and budget uncertainty
+
+Model calls reserve input JSON bytes plus `KAPI_MODEL_OUTPUT_RESERVATION_TOKENS` (default 64,000)
+under a shared SQL admission lock. All API replicas enforce per-run and per-user concurrency
+(default 1 and 2). Busy admission returns a retryable 429; insufficient unreserved budget is terminal.
+Successful calls settle actual usage atomically. Failed calls with unknown usage charge the full
+reservation; crashed processes leave reservations in place so their unknown spend is never refunded.
+Expired reservations stop occupying concurrency slots, but still occupy the run's token budget.
+Do not delete these rows to free capacity without reconciling provider usage.
+
+The Codex backend does not accept `max_output_tokens`. A reservation therefore cannot guarantee a
+strict provider token ceiling: one response can exceed its reserved allowance. Such usage is fully
+recorded and blocks future admission. Increase the output allowance for workloads with large reasoning
+outputs. The default serializes calls within a run to prevent concurrent last-budget overshoot.
