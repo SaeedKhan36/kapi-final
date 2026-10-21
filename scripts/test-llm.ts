@@ -6,7 +6,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModel } from "ai";
 import {
   BudgetExceededError, ModelRouter, NoModelAvailableError, classifyFailure,
-  codexHeaders, loadGrant, saveGrant, markGrantRevoked, modelsFor,
+  credentialFor, CodexAuthError, codexHeaders, loadGrant, saveGrant, markGrantRevoked, modelsFor,
 } from "@kapi/llm";
 import { assert, equal, group, report, test } from "./harness.ts";
 import { grantFromCodexAuthCache } from "../apps/control-plane/src/codex-device-auth.ts";
@@ -322,6 +322,23 @@ await test("a revoked grant stops being offered", async () => {
   });
   await markGrantRevoked(handle, s.userId);
   equal(await loadGrant(handle, s.userId), null, "a revoked connection reads as absent");
+});
+
+await test("concurrent credential refresh rotates the grant once across callers",async()=>{
+  const s=await seedRun(handle);await saveGrant(handle,s.userId,{accessToken:"expired",refreshToken:"rotate-once",expiresAt:0});
+  let calls=0;
+  const refresh=async()=>{calls++;await new Promise(r=>setTimeout(r,30));return{accessToken:"fresh",refreshToken:"rotated",expiresAt:Date.now()+3600_000};};
+  const credentials=await Promise.all(Array.from({length:8},()=>credentialFor(handle,s.userId,refresh)));
+  equal(calls,1);assert(credentials.every(c=>c?.accessToken==="fresh"),"all callers use the rotated grant");
+});
+await test("refresh failure preserves transient grants and cannot undo a queued revoke",async()=>{
+  const s=await seedRun(handle);await saveGrant(handle,s.userId,{accessToken:"expired",refreshToken:"valid",expiresAt:0});
+  await credentialFor(handle,s.userId,async()=>{throw new CodexAuthError("temporary",true);});
+  assert(await loadGrant(handle,s.userId),"transient failure does not revoke grant");
+  let started!:()=>void;const began=new Promise<void>(r=>{started=r;});
+  const updating=credentialFor(handle,s.userId,async()=>{started();await new Promise(r=>setTimeout(r,50));return{accessToken:"fresh",expiresAt:Date.now()+3600_000};});
+  await began;const revoke=markGrantRevoked(handle,s.userId);await Promise.all([updating,revoke]);
+  equal(await loadGrant(handle,s.userId),null,"explicit revoke wins after in-flight refresh");
 });
 
 await testDb.close();
