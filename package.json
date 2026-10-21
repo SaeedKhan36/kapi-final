@@ -42,7 +42,8 @@
     "build:agent": "pnpm --filter @kapi/agent build",
     "probe:daytona": "tsx scripts/probe-daytona.ts",
     "run:agent": "pnpm build:agent && tsx scripts/run-agent.ts",
-    "audit:all": "pnpm audit --audit-level=moderate"
+    "audit:all": "pnpm audit --audit-level=moderate",
+    "restore:workspace": "tsx scripts/restore-workspace.ts"
   },
   "devDependencies": {
     "@hono/node-server": "^1.13.7",

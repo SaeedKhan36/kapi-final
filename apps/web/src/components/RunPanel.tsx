@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { countByStatus, toTree, type RunState } from "~/lib/agents.ts";
 import { isTerminal } from "~/lib/useRun.ts";
 import type { Run } from "~/lib/types.ts";
+import { apiBase } from "~/lib/api.ts";
 import { AgentTree } from "./AgentTree.tsx";
 import { ActivityFeed } from "./ActivityFeed.tsx";
 import { Badge, Button, Card, Empty, ErrorNote, LiveDot, Spinner } from "./ui.tsx";
@@ -70,6 +71,14 @@ export function RunPanel(
           )}
         </div>
       </header>
+
+      <div className="flex flex-wrap gap-3 text-xs">
+        {state.order.filter((id) => state.nodes[id]?.kind === "build").map((id) => (
+          <a key={id} className="underline" href={`${apiBase}/api/runs/${encodeURIComponent(run.id)}/jobs/${encodeURIComponent(id)}/workspace`}>
+            Download workspace: {id}
+          </a>
+        ))}
+      </div>
 
       <Card className="p-4">
         <div className="grid gap-3 sm:grid-cols-2">

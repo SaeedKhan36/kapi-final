@@ -78,3 +78,21 @@ pnpm verify          # complete local release-candidate gate
 
 GitHub Actions also builds the final Docker image, checks its non-root user, runs CodeQL, and
 runs browser tests against the production web bundle. Never point tests at a production database.
+
+### Recovering local Build output
+
+Each successful Build checkpoint atomically stores a workspace export alongside its transcript.
+The run panel exposes a download link per Build agent, also available at
+`GET /api/runs/:runId/jobs/:jobId/workspace` with ordinary run-owner authentication.
+Exports survive VM cleanup, including cancellation after a checkpoint. They contain a thin Git
+bundle for unpublished commits, binary staged/unstaged patches and non-ignored untracked files.
+Clone the original repository into a fresh directory, then run:
+
+```bash
+pnpm restore:workspace /path/to/workspace.json /path/to/fresh-clone
+```
+
+The export records `publication: local|published`; finishing a local task does not imply a PR exists.
+Snapshots are limited to 1 MB to leave room for the transcript in the default 2 MiB API body limit.
+Oversized or failed snapshots stop the Build rather than advancing an unrestorable transcript.
+Changes made after the last acknowledged checkpoint cannot be recovered after an abrupt VM loss.

@@ -41,7 +41,10 @@ export async function captureWorkspace(cwd: string, baseBranch: string, pinnedBa
       untracked.push({ path, data, executable: Boolean(stat.mode & 0o111) });
       bytes += Buffer.byteLength(JSON.stringify(untracked.at(-1)));
     }
-    const snapshot = { baseCommit, headCommit, bundle, stagedPatch, workingPatch, untracked };
+    const publishedHead = await git(cwd, ["config", "--get", "kapi.published-head"]).catch(() => "");
+    const publication = publishedHead.trim() === headCommit && !stagedPatch && !workingPatch && !untracked.length
+      ? "published" as const : "local" as const;
+    const snapshot = { publication, baseCommit, headCommit, bundle, stagedPatch, workingPatch, untracked };
     if (Buffer.byteLength(JSON.stringify(snapshot)) > MAX_WORKSPACE_BYTES) throw new Error("workspace exceeds checkpoint limit");
     return snapshot;
   } finally { await rm(temp, { recursive: true, force: true }); }
@@ -60,6 +63,7 @@ export async function restoreWorkspace(cwd: string, snapshot: WorkspaceSnapshot,
       await git(cwd, ["fetch", path, "HEAD"]);
     }
     await git(cwd, ["checkout", "-B", branch, snapshot.headCommit]);
+    if (snapshot.publication === "published") await git(cwd, ["config", "--local", "kapi.published-head", snapshot.headCommit]);
     for (const [name, patch, index] of [["staged", snapshot.stagedPatch, true], ["working", snapshot.workingPatch, false]] as const) {
       if (!patch) continue;
       const path = join(temp, `${name}.patch`);

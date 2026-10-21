@@ -101,6 +101,8 @@ export const gitPushTool: AgentTool = {
 
     const output = scrub(res.stderr || res.stdout, creds.token);
     if (res.exitCode !== 0) return { ok: false, output: `git push failed:\n${output}` };
+    // Local marker records exactly which commit was published, without storing credentials.
+    await shell(ctx.cwd, 'git config --local kapi.published-head "$(git rev-parse HEAD)"');
     return { output: `pushed ${branch}`, meta: { branch } };
   },
 };

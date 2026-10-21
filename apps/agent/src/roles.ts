@@ -281,9 +281,11 @@ export const buildRole: RoleHandler = async (rc) => {
   const commits = await commitsOnBranch(cwd, base);
   const files = await changedFiles(cwd, base);
 
+  const exported = await client.loadCheckpoint();
+  const publication = exported?.workspace?.publication ?? "local";
   return {
     ok: outcome.ok,
-    summary: outcome.summary,
+    summary: `${outcome.summary}\nOutput: ${publication === "published" ? "published to GitHub" : "saved locally as a downloadable workspace export"}.`,
     filesChanged: files.map((path) => ({ path, action: "modified" as const })),
     commits: commits.length > 0 ? commits : outcome.commits,
     branch: prepared.branch,

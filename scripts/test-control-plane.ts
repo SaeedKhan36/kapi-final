@@ -933,6 +933,26 @@ await test("a secret can be deleted", async () => {
   assert(!listed.body.some((s) => s.name === "TEST_SERVICE_TOKEN"), "gone from the listing");
 });
 
+await test("workspace export survives completion and enforces run ownership", async () => {
+  const { runId: id, jobId } = await freshRun("preserve local output");
+  await claim(handle, { vmId: "vm-export", jobId, runId: id });
+  await startAgent(id, jobId, "vm-export");
+  const token = mintJobToken({ jobId, runId: id, vmId: "vm-export" });
+  const workspace = { baseCommit: "a".repeat(40), headCommit: "a".repeat(40),
+    stagedPatch: "", workingPatch: "", untracked: [], publication: "local" };
+  const saved = await fetch(`${base}/agent/checkpoint`, { method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ step: 1, messages: [], workspace }),
+  });
+  equal(saved.status, 200, "checkpoint persisted");
+  await api("POST", `/api/runs/${id}/cancel`);
+  const downloaded = await fetch(`${base}/api/runs/${id}/jobs/${jobId}/workspace`);
+  equal(downloaded.status, 200, "output outlives the agent");
+  assert(downloaded.headers.get("content-disposition")?.includes("attachment"), "download attachment");
+  equal((await downloaded.json() as { publication: string }).publication, "local");
+  equal((await api("GET", `/api/runs/run_not_owned/jobs/${jobId}/workspace`)).status, 404, "ownership enforced");
+});
+
 wss.close();
 await hub.close();
 await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));

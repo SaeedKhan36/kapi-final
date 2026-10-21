@@ -414,6 +414,18 @@ export function createApp(deps: {
     return detail ? c.json(detail) : c.json({ error: "run not found" }, 404);
   });
 
+  app.get("/api/runs/:id/jobs/:jobId/workspace", async (c) => {
+    const id = c.req.param("id");
+    if (!(await ownsRun(c, id))) return c.json({ error: "run not found" }, 404);
+    const rows = await handle.raw<{ body: unknown }>(
+      `SELECT body FROM artifacts WHERE run_id=$1 AND job_id=$2 AND kind='workspace.export'`,
+      [id, c.req.param("jobId")],
+    );
+    if (!rows[0]) return c.json({ error: "workspace export not available" }, 404);
+    c.header("Content-Disposition", 'attachment; filename="workspace.json"');
+    return c.json(rows[0].body);
+  });
+
   app.get("/api/runs/:id/events", async (c) => {
     const id = c.req.param("id");
     if (!(await ownsRun(c, id))) return c.json({ error: "run not found" }, 404);

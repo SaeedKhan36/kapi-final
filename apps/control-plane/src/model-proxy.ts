@@ -192,12 +192,19 @@ export function createModelProxy(deps: { handle: DbHandle }) {
     if (!parsed.success) {
       return c.json({ error: "invalid checkpoint", issues: parsed.error.issues }, 400);
     }
-    await handle.raw(
-      `INSERT INTO artifacts (id, run_id, job_id, kind, body)
-       VALUES ($1, $2, $3, 'checkpoint', $4)
-       ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body, created_at=now()`,
-      [`ckpt_${jobId}`, runId, jobId, JSON.stringify(parsed.data)],
-    );
+    await handle.transaction(async (tx) => {
+      await tx(
+        `INSERT INTO artifacts (id, run_id, job_id, kind, body)
+         VALUES ($1, $2, $3, 'checkpoint', $4)
+         ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body, created_at=now()`,
+        [`ckpt_${jobId}`, runId, jobId, JSON.stringify(parsed.data)],
+      );
+      if (parsed.data.workspace) await tx(
+        `INSERT INTO artifacts (id,run_id,job_id,kind,body) VALUES ($1,$2,$3,'workspace.export',$4)
+         ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body,created_at=now()`,
+        [`workspace_${jobId}`, runId, jobId, JSON.stringify(parsed.data.workspace)],
+      );
+    });
     return c.json({ ok: true, step: parsed.data.step });
   });
 

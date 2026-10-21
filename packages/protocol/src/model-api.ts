@@ -63,6 +63,7 @@ export const ModelResponseSchema = z.object({
 export type ModelResponse = z.infer<typeof ModelResponseSchema>;
 
 export const WorkspaceSnapshotSchema = z.object({
+  publication: z.enum(["local", "published"]).default("local"),
   baseCommit: z.string().regex(/^[a-f0-9]{40,64}$/),
   headCommit: z.string().regex(/^[a-f0-9]{40,64}$/),
   bundle: z.string().optional(),
