@@ -186,3 +186,17 @@ The Codex backend does not accept `max_output_tokens`. A reservation therefore c
 strict provider token ceiling: one response can exceed its reserved allowance. Such usage is fully
 recorded and blocks future admission. Increase the output allowance for workloads with large reasoning
 outputs. The default serializes calls within a run to prevent concurrent last-budget overshoot.
+
+### VM admission and scheduling
+
+All operations workers sharing a deployment database must use the same capacity configuration.
+`KAPI_MAX_ACTIVE_VMS` (default 32) and `KAPI_MAX_ACTIVE_VMS_PER_USER` (default 8) are enforced
+under a shared SQL admission lock before calling a provider. Reservations and resources awaiting
+confirmed deletion occupy capacity; per-run limits still apply independently. Keep unrelated
+deployments in separate databases. A resource created externally or lost before its provider ID
+is returned still requires inventory reconciliation.
+
+Candidates prioritize users with fewer allocated resources, then round-robin position within each
+user's queue, then job priority and age. `KAPI_PROVISION_CONCURRENCY` (default 4) bounds simultaneous
+provider startups per worker; authoritative resource limits apply across all workers. Failed starts
+retain resource references until deletion is confirmed before another attempt can reserve that job.

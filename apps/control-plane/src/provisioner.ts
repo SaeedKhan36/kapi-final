@@ -8,6 +8,7 @@ import { JOB_COLUMNS } from "@kapi/queue";
 import { createVmProvider, type ProviderName, type VmProvider } from "@kapi/vm";
 import { appendEvent } from "@kapi/queue";
 import { log } from "./log.ts";
+import { positiveLimit } from "./model-admission.ts";
 
 const AGENT_BUNDLE = fileURLToPath(
   new URL("../../agent/dist/agent.mjs", import.meta.url),
@@ -98,17 +99,19 @@ export class Provisioner {
     this.#busy = true;
     try {
       await this.reapStaleProvisioning();
+      await this.reclaim();
       const pending = await this.#pending();
       await this.#announceBudgetStops();
       const started: Job[] = [];
-      for (const job of pending) {
-        try {
-          await this.provision(job);
-          started.push(job);
-        } catch (err) {
-          this.#log(`could not provision ${job.id}: ${err instanceof Error ? err.message : String(err)}`);
+      let next = 0;
+      const parallelism = positiveLimit(process.env.KAPI_PROVISION_CONCURRENCY, 4);
+      await Promise.all(Array.from({ length: Math.min(parallelism, pending.length) }, async () => {
+        while (next < pending.length) {
+          const job = pending[next++]!;
+          try { await this.provision(job); started.push(job); }
+          catch (err) { this.#log(`could not provision ${job.id}: ${err instanceof Error ? err.message : String(err)}`); }
         }
-      }
+      }));
       return started;
     } finally {
       this.#busy = false;
@@ -136,11 +139,16 @@ export class Provisioner {
          SELECT j.*,
                 r.max_concurrent_vms,
                 COALESCE(l.n, 0) AS live_count,
+                (SELECT count(*) FROM agents ua JOIN runs ur ON ur.id=ua.run_id
+                 JOIN projects up ON up.id=ur.project_id
+                 WHERE up.owner_id=p.owner_id AND ua.vm_id IS NOT NULL AND ua.provider IS NOT NULL) AS user_live,
+                ROW_NUMBER() OVER (PARTITION BY p.owner_id ORDER BY j.priority DESC,j.created_at ASC) AS owner_rank,
                 ROW_NUMBER() OVER (
                   PARTITION BY j.run_id ORDER BY j.priority DESC, j.created_at ASC
                 ) AS rn
          FROM jobs j
          JOIN runs r ON r.id = j.run_id
+         JOIN projects p ON p.id = r.project_id
          LEFT JOIN live l ON l.run_id = j.run_id
          WHERE j.status = 'queued'
            AND ($2::text IS NULL OR j.run_id = $2::text)
@@ -148,7 +156,7 @@ export class Provisioner {
            AND r.vm_seconds < r.max_vm_seconds
            AND (r.cost_status = 'unavailable' OR r.usd_cents < r.max_usd_cents)
            AND NOT EXISTS (
-             SELECT 1 FROM agents a WHERE a.job_id = j.id AND a.stopped_at IS NULL
+             SELECT 1 FROM agents a WHERE a.job_id = j.id AND (a.stopped_at IS NULL OR (a.vm_id IS NOT NULL AND a.provider IS NOT NULL))
            )
            AND NOT EXISTS (
              SELECT 1 FROM agents retry
@@ -166,7 +174,7 @@ export class Provisioner {
        -- agents alone would let every job in one batch see the same zero and
        -- blow straight through the cap.
        WHERE live_count + rn <= max_concurrent_vms
-       ORDER BY priority DESC, created_at ASC
+       ORDER BY user_live ASC, owner_rank ASC, priority DESC, created_at ASC
        LIMIT $1`,
       [
         limit,
@@ -219,6 +227,18 @@ export class Provisioner {
     // Claim the slot BEFORE creating anything: two provisioner ticks (or two
     // plane instances) must not both build a VM for the same job.
     const claimed = await retryDeadlockedTransaction(this.handle, async (tx) => {
+      // Shared deployment lock makes global and user admission authoritative across workers.
+      await tx(`SELECT id FROM admission_locks WHERE id='vm' FOR UPDATE`);
+      const capacity = await tx<{ total: number; owned: number }>(
+        `SELECT count(*)::int AS total,
+         count(*) FILTER (WHERE p.owner_id=(SELECT p2.owner_id FROM runs r2
+           JOIN projects p2 ON p2.id=r2.project_id WHERE r2.id=$1))::int AS owned
+         FROM agents a JOIN runs r ON r.id=a.run_id JOIN projects p ON p.id=r.project_id
+         WHERE a.vm_id IS NOT NULL AND a.provider IS NOT NULL`, [job.runId]);
+      if (Number(capacity[0]?.total) >= positiveLimit(process.env.KAPI_MAX_ACTIVE_VMS, 32) ||
+          Number(capacity[0]?.owned) >= positiveLimit(process.env.KAPI_MAX_ACTIVE_VMS_PER_USER, 8)) return [];
+      const queued = await tx<{status:string}>(`SELECT status FROM jobs WHERE id=$1`, [job.id]);
+      if (queued[0]?.status !== "queued") return [];
       const runs = await tx<{
         status: string; max_concurrent_vms: number; vm_seconds: number;
         max_vm_seconds: number; cost_status: string; usd_cents: number; max_usd_cents: number;
@@ -245,7 +265,7 @@ export class Provisioner {
          ON CONFLICT (job_id) DO UPDATE
            SET status = 'provisioning', vm_id = EXCLUDED.vm_id,
                stopped_at = NULL, last_heartbeat = now()
-           WHERE agents.stopped_at IS NOT NULL
+           WHERE agents.stopped_at IS NOT NULL AND (agents.vm_id IS NULL OR agents.provider IS NULL)
          RETURNING job_id`,
         [job.id, job.runId, job.role, vmId, this.#provider.name],
       );
@@ -283,7 +303,7 @@ export class Provisioner {
         },
       });
     } catch (err) {
-      await this.#release(job.id, "provision-failed");
+      await this.#release(job.id, "provision-failed", true);
       // Provider errors may contain request bodies or CLI arguments with secrets.
       throw new Error(`VM provisioning failed (${this.#provider.name}); inspect provider-side diagnostics`);
     }
@@ -323,9 +343,9 @@ export class Provisioner {
       });
     } catch (err) {
       // Never leave a VM running for an agent that failed to start.
-      await this.#provider.destroy(vm.id).catch(() => {});
-      this.#started.delete(job.id);
-      await this.#release(job.id, "agent-start-failed");
+      const deleted = await this.#provider.destroy(vm.id).then(() => true).catch(() => false);
+      if (deleted) this.#started.delete(job.id);
+      await this.#release(job.id, "agent-start-failed", deleted);
       throw new Error(`Agent startup failed (${this.#provider.name}); inspect provider-side diagnostics`);
     }
 
@@ -353,9 +373,10 @@ export class Provisioner {
     return resolved;
   }
 
-  async #release(jobId: string, status: string) {
+  async #release(jobId: string, status: string, deleted = false) {
     await this.handle.raw(
-      `UPDATE agents SET status = $2, stopped_at = now() WHERE job_id = $1`, [jobId, status],
+      `UPDATE agents SET status=$2,stopped_at=now(),vm_id=CASE WHEN $3 THEN NULL ELSE vm_id END WHERE job_id=$1`,
+      [jobId, status, deleted],
     );
   }
 
@@ -377,13 +398,15 @@ export class Provisioner {
          AND a.status = 'provisioning' AND a.stopped_at IS NULL
          AND j.status = 'queued'
          AND COALESCE(a.last_heartbeat, a.started_at) <= $2
-         AND ($3::text IS NULL OR a.run_id = $3::text)
+         AND ($3::text IS NULL OR a.run_id = $3::text) AND a.provider=$4
        RETURNING a.job_id, a.vm_id`,
-      [now.toISOString(), cutoff.toISOString(), this.opts.runId ?? null],
+      [now.toISOString(), cutoff.toISOString(), this.opts.runId ?? null, this.#provider.name],
     );
     for (const row of rows) {
-      if (row.vm_id) await this.#destroyVm(row.job_id, row.vm_id);
-      this.#started.delete(row.job_id);
+      if (row.vm_id && await this.#destroyVm(row.job_id, row.vm_id)) {
+        await this.handle.raw(`UPDATE agents SET vm_id=NULL WHERE job_id=$1 AND vm_id=$2 AND stopped_at IS NOT NULL`, [row.job_id,row.vm_id]);
+        this.#started.delete(row.job_id);
+      }
       this.#log(`timed out provisioning ${row.job_id}; released it for retry`);
     }
     return rows.length;
@@ -428,7 +451,7 @@ export class Provisioner {
       `SELECT a.job_id, a.vm_id FROM agents a
        JOIN jobs j ON j.id = a.job_id
        WHERE a.vm_id IS NOT NULL AND a.stopped_at IS NOT NULL
-         AND j.status IN ('succeeded','failed','cancelled') AND a.provider=$1`,
+         AND a.provider=$1`,
       [this.#provider.name],
     );
     let destroyed = 0;
