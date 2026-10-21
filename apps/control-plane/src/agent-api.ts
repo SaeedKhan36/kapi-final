@@ -98,7 +98,8 @@ export function createAgentApi(deps: {
       `INSERT INTO agents (job_id, run_id, role, status, vm_id, last_heartbeat)
        VALUES ($1, $2, $3, 'claimed', $4, now())
        ON CONFLICT (job_id) DO UPDATE
-         SET status = 'claimed', vm_id = EXCLUDED.vm_id,
+         SET status = 'claimed',
+             vm_id = CASE WHEN agents.provider IS NOT NULL THEN agents.vm_id ELSE EXCLUDED.vm_id END,
              last_heartbeat = now(), stopped_at = NULL`,
       [job.id, job.runId, job.role, vmId],
     );

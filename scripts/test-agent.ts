@@ -325,6 +325,21 @@ await test("the provisioner starts an agent that runs the job to completion", as
   );
 });
 
+await test("claim preserves provider identity for reconciliation and cleanup", async () => {
+  const s = await seedRun(handle);
+  const job = await echoJob(s.runId);
+  await provisioner.provision(job);
+  await waitFor("the claimed agent", async () => {
+    const current = await getJob(handle, job.id);
+    return current?.status === "succeeded" ? current : null;
+  });
+  const rows = await handle.raw<{ vm_id: string }>(`SELECT vm_id FROM agents WHERE job_id=$1`, [job.id]);
+  const resources = await provider.listManaged();
+  assert(resources.some((vm) => vm.id === rows[0]?.vm_id), "provider ID survives claim");
+  await provisioner.reclaim();
+  assert(!(await provider.listManaged()).some((vm) => vm.id === rows[0]?.vm_id), "actual resource removed");
+});
+
 await test("a job is not provisioned twice", async () => {
   const s = await seedRun(handle);
   await echoJob(s.runId);
