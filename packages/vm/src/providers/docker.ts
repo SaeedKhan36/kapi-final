@@ -145,19 +145,21 @@ export class DockerProvider implements VmProvider {
 
   async destroy(id: string) {
     if (!this.#boxes.has(id)) return;
-    try {
-      await run("docker", ["rm", "-f", id], { timeout: 30000 });
-    } finally {
-      this.#boxes.delete(id);
-    }
+    await run("docker", ["rm", "-f", id], { timeout: 30000 });
+    this.#boxes.delete(id);
   }
 
   /** Containers are addressable by id, so a restarted plane can still clean up. */
   async destroyOrphan(id: string) {
     try {
       await run("docker", ["rm", "-f", id], { timeout: 30_000 });
+      this.#boxes.delete(id);
       return true;
-    } catch {
+    } catch (err) {
+      if (/No such (container|object):/i.test(String((err as { stderr?: string }).stderr ?? ""))) {
+        this.#boxes.delete(id);
+        return true;
+      }
       return false;
     }
   }

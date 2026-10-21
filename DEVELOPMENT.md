@@ -96,3 +96,10 @@ The export records `publication: local|published`; finishing a local task does n
 Snapshots are limited to 1 MB to leave room for the transcript in the default 2 MiB API body limit.
 Oversized or failed snapshots stop the Build rather than advancing an unrestorable transcript.
 Changes made after the last acknowledged checkpoint cannot be recovered after an abrupt VM loss.
+
+### Reliability verification
+
+See [RELIABILITY_VERIFICATION.md](./RELIABILITY_VERIFICATION.md) for the executed local/PostgreSQL
+checks, saved synthetic-load samples and the remaining live integration gate. `pnpm test:load:local`
+uses real local agent processes with an echo role; `pnpm test:live:local` uses the connected user's
+real model and GitHub installation and creates a documentation PR on the explicitly selected project.

@@ -333,3 +333,13 @@ export const usageLedger = pgTable(
     index("usage_ledger_run_idx").on(t.runId, t.createdAt),
   ],
 );
+
+/** Operational admission state is shared by all API/worker replicas. */
+export const admissionLocks = pgTable("admission_locks", { id: text("id").primaryKey() });
+export const modelReservations = pgTable("model_reservations", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokens: integer("tokens").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => [index("model_reservations_run_idx").on(t.runId), index("model_reservations_user_idx").on(t.userId,t.expiresAt)]);

@@ -34,6 +34,7 @@ export class PlaneClient {
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const retries = this.opts.retries ?? 4;
     let lastError = "";
+    const capacityDeadline = Date.now() + 180_000;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) {
@@ -52,7 +53,14 @@ export class PlaneClient {
 
         if (res.status === 429 && path === "/agent/model") {
           const detail = JSON.parse(text) as { retryable?: boolean };
-          if (detail.retryable) { lastError = "model capacity busy"; continue; }
+          if (detail.retryable && Date.now() < capacityDeadline) {
+            // Capacity contention is not a transport failure and must not burn the network retry budget.
+            // Heartbeats continue while this timer waits; cancellation is checked on the next request.
+            lastError = "model capacity busy";
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            attempt--;
+            continue;
+          }
         }
         // 4xx is our mistake or an expired token; retrying cannot fix it.
         if (res.status >= 400 && res.status < 500) {

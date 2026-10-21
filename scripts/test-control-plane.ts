@@ -945,6 +945,8 @@ await test("workspace export survives completion and enforces run ownership", as
     body: JSON.stringify({ step: 1, messages: [], workspace }),
   });
   equal(saved.status, 200, "checkpoint persisted");
+  const detail = await api<{ artifacts: Array<{kind:string;body:unknown}> }>("GET", `/api/runs/${id}`);
+  assert(detail.body.artifacts.filter(a=>a.kind==="checkpoint"||a.kind==="workspace.export").every(a=>a.body===null), "run reads omit large workspace/transcript bodies");
   await api("POST", `/api/runs/${id}/cancel`);
   const downloaded = await fetch(`${base}/api/runs/${id}/jobs/${jobId}/workspace`);
   equal(downloaded.status, 200, "output outlives the agent");

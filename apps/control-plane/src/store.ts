@@ -231,7 +231,9 @@ export class Store {
       this.h.raw<Record<string, unknown>>(`SELECT * FROM agents WHERE run_id = $1`, [runId]),
       this.listEvents(runId),
       this.h.raw<Record<string, unknown>>(
-        `SELECT * FROM artifacts WHERE run_id = $1 ORDER BY created_at ASC`, [runId],
+        `SELECT id,run_id,job_id,kind,created_at,
+         CASE WHEN kind IN ('checkpoint','workspace.export') THEN NULL ELSE body END AS body
+         FROM artifacts WHERE run_id = $1 ORDER BY created_at ASC`, [runId],
       ),
     ]);
     return { run, jobs, agents, events, artifacts };

@@ -69,6 +69,11 @@ jobs:
         run: pnpm test:backend
       - name: Queue concurrency
         run: pnpm test:queue
+      - name: Local agent orchestration load (synthetic; no provider credentials)
+        run: pnpm test:load:local
+        env:
+          KAPI_LOAD_USERS: "10"
+          KAPI_LOAD_RUNS_PER_USER: "3"
       - name: Web build
         run: pnpm build:web
       - name: Deterministic UI tests

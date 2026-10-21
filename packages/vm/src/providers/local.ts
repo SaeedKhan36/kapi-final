@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
+import { access, mkdtemp, rm, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve, relative, isAbsolute, basename } from "node:path";
 import type {
@@ -220,8 +220,13 @@ export class LocalProvider implements VmProvider {
   }
 
   async destroyOrphan(id: string) {
+    if (this.#boxes.has(id)) { await this.destroy(id); return true; }
     const manifest = await this.#readManifest(this.#manifestPath(id)).catch(() => null);
-    if (!manifest?.managed || manifest.id !== id) return false;
+    if (!manifest?.managed || manifest.id !== id) {
+      // Confirmed absence is a successful idempotent delete; permission errors are not.
+      try { await access(id); return false; }
+      catch (err) { return (err as NodeJS.ErrnoException).code === "ENOENT"; }
+    }
     for (const pid of manifest.pids ?? []) {
       try { if (pid) process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
       try { if (pid) process.kill(pid, "SIGKILL"); } catch { /* already gone */ }

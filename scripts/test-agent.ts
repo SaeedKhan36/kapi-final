@@ -9,6 +9,7 @@ import { LocalProvider, type Vm, type VmProvider, type VmSpec } from "@kapi/vm";
 import { createApp } from "../apps/control-plane/src/app.ts";
 import { EventHub } from "../apps/control-plane/src/events.ts";
 import { Provisioner } from "../apps/control-plane/src/provisioner.ts";
+import { VmReconciler } from "../apps/control-plane/src/reconciler.ts";
 import { RequestTracker } from "../apps/control-plane/src/request-tracker.ts";
 import { Store } from "../apps/control-plane/src/store.ts";
 import { assert, equal, group, report, sleep, test } from "./harness.ts";
@@ -325,19 +326,29 @@ await test("the provisioner starts an agent that runs the job to completion", as
   );
 });
 
-await test("claim preserves provider identity for reconciliation and cleanup", async () => {
-  const s = await seedRun(handle);
-  const job = await echoJob(s.runId);
-  await provisioner.provision(job);
-  await waitFor("the claimed agent", async () => {
-    const current = await getJob(handle, job.id);
-    return current?.status === "succeeded" ? current : null;
-  });
-  const rows = await handle.raw<{ vm_id: string }>(`SELECT vm_id FROM agents WHERE job_id=$1`, [job.id]);
-  const resources = await provider.listManaged();
-  assert(resources.some((vm) => vm.id === rows[0]?.vm_id), "provider ID survives claim");
-  await provisioner.reclaim();
-  assert(!(await provider.listManaged()).some((vm) => vm.id === rows[0]?.vm_id), "actual resource removed");
+await test("provision, claim, reconcile and delete use the actual provider resource", async () => {
+  const s = await seedRun(handle); const job = await echoJob(s.runId);
+  const local = new LocalProvider(); let token = "";
+  const paused = {
+    name: "local", create: local.create.bind(local), writeFile: local.writeFile.bind(local),
+    listManaged: local.listManaged.bind(local), destroy: local.destroy.bind(local),
+    destroyOrphan: local.destroyOrphan.bind(local),
+    spawnDetached: async (_id: string, _cmd: string, opts: { env?: Record<string,string> }) => { token = opts.env!.KAPI_JOB_TOKEN!; },
+  } as unknown as VmProvider;
+  const p = new Provisioner(handle, { provider: paused, publicUrl: base, onLog: () => {} });
+  try {
+    const realId = await p.provision(job);
+    const claimed = await fetch(`${base}/agent/claim`, {method:"POST",headers:{authorization:`Bearer ${token}`}});
+    equal(claimed.status,200);
+    const rows=await handle.raw<{vm_id:string}>(`SELECT vm_id FROM agents WHERE job_id=$1`,[job.id]);
+    equal(rows[0]?.vm_id,realId,"provider identity survives job-token claim");
+    const result=await new VmReconciler(handle,paused).reconcile();
+    equal(result.missing,0,"existing provider VM is not missing");
+    await fetch(`${base}/agent/complete`, {method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},
+      body:JSON.stringify({result:{ok:true,summary:"verified",filesChanged:[],commits:[]}})});
+    await p.reclaim();
+    assert(!(await local.listManaged()).some(vm=>vm.id===realId),"actual resource deleted");
+  } finally { await local.destroyAll(); }
 });
 
 await test("a job is not provisioned twice", async () => {
@@ -466,6 +477,13 @@ await test("failed provider deletion retains its reference and succeeds on a lat
   await p.reclaim();
   const done = await handle.raw<{vm_id:string|null}>(`SELECT vm_id FROM agents WHERE job_id=$1`, [job.id]);
   equal(done[0]?.vm_id, null);
+});
+
+await test("local deletion is idempotent after provider resource loss", async () => {
+  const local = new LocalProvider();
+  const vm = await local.create({ name: "already-deleted" });
+  await local.destroy(vm.id);
+  assert(await local.destroyOrphan(vm.id), "confirmed absence permits cleanup to release capacity");
 });
 
 group("surviving a lost VM");

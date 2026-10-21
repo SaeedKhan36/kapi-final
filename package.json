@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit && pnpm --filter @kapi/web typecheck",
     "test:ui": "pnpm --filter @kapi/web test",
     "test:e2e": "playwright test",
-    "test:backend": "tsx scripts/test-protocol.ts && tsx scripts/test-roles.ts && tsx scripts/test-github-app.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts && tsx scripts/test-workspace.ts && tsx scripts/test-admission.ts && tsx scripts/test-provision-capacity.ts",
+    "test:backend": "tsx scripts/test-protocol.ts && tsx scripts/test-roles.ts && tsx scripts/test-github-app.ts && tsx scripts/test-control-plane.ts && tsx scripts/test-operations.ts && tsx scripts/test-agent.ts && tsx scripts/test-llm.ts && tsx scripts/test-agent-core.ts && tsx scripts/test-captain.ts && tsx scripts/test-workspace.ts && tsx scripts/test-admission.ts && tsx scripts/test-provision-capacity.ts && tsx scripts/test-local-lifecycle.ts && tsx scripts/test-client-admission.ts",
     "test:queue": "tsx scripts/test-queue.ts",
     "test:unit": "pnpm build:agent && pnpm test:backend && pnpm test:queue",
     "verify": "pnpm test:deployment && pnpm typecheck && pnpm test:unit && pnpm test:ui && pnpm build:control-plane && pnpm build:web",
@@ -43,7 +43,10 @@
     "probe:daytona": "tsx scripts/probe-daytona.ts",
     "run:agent": "pnpm build:agent && tsx scripts/run-agent.ts",
     "audit:all": "pnpm audit --audit-level=moderate",
-    "restore:workspace": "tsx scripts/restore-workspace.ts"
+    "restore:workspace": "tsx scripts/restore-workspace.ts",
+    "test:load:local": "pnpm build:agent && tsx scripts/load-local-fleet.ts",
+    "test:admission": "tsx scripts/test-admission.ts && tsx scripts/test-provision-capacity.ts",
+    "test:live:local": "tsx scripts/probe-local-lifecycle.ts"
   },
   "devDependencies": {
     "@hono/node-server": "^1.13.7",

@@ -184,11 +184,9 @@ export class DaytonaProvider implements VmProvider {
   async destroy(id: string) {
     const entry = this.#boxes.get(id);
     if (!entry) return;
-    try {
-      await (entry.handle.delete?.() ?? entry.handle.remove?.());
-    } finally {
-      this.#boxes.delete(id);
-    }
+    if (!entry.handle.delete && !entry.handle.remove) throw new VmError("provider has no delete operation", this.name);
+    await (entry.handle.delete?.() ?? entry.handle.remove?.());
+    this.#boxes.delete(id);
   }
 
   /**
@@ -204,10 +202,13 @@ export class DaytonaProvider implements VmProvider {
       const daytona = await this.#sdk();
       const handle = await (daytona.get?.(id) ?? daytona.findOne?.({ id }));
       if (!handle) return false;
+      if (!handle.delete && !handle.remove) return false;
       await (handle.delete?.() ?? handle.remove?.());
       this.#boxes.delete(id);
       return true;
-    } catch {
+    } catch (err) {
+      const error = err as { status?: number; response?: { status?: number } };
+      if (error.status === 404 || error.response?.status === 404) { this.#boxes.delete(id); return true; }
       return false;
     }
   }

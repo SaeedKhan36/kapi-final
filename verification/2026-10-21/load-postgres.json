@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-10-21T06:45:50.512Z",
+  "runtime": {
+    "node": "v24.11.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "logicalCpus": 10,
+    "memoryGiB": 16
+  },
+  "workload": "synthetic echo agents; no AI, GitHub, or Daytona",
+  "database": "PostgreSQL",
+  "users": 50,
+  "runsPerUser": 3,
+  "completed": 150,
+  "elapsedSeconds": 4.622964625000001,
+  "jobsPerSecond": 32.44671161635808,
+  "peakAllocatedResources": 8,
+  "limits": {
+    "global": 8,
+    "perUser": 2
+  },
+  "queueDelayP95Ms": 4249.258,
+  "healthLatencyP95Ms": 8.568958000000066,
+  "resourcesRemaining": 0
+}
