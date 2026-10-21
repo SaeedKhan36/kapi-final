@@ -1,3 +1,4 @@
+import { settleExpiredModelCalls } from "./model-admission.ts";
 import type { DbHandle } from "@kapi/db";
 import { startReaper } from "@kapi/queue";
 import type { EventHub } from "./events.ts";
@@ -35,6 +36,7 @@ export function startOperations(deps: {
   const stopReconciler = process.env.KAPI_RECONCILER === "off" ? () => {} : reconciler.start();
   const reclaimTimer = setInterval(() => void (async () => {
     await accounting.settle();
+    await settleExpiredModelCalls(handle);
     await provisioner.reclaim();
   })().catch(() => {}), 30_000);
   reclaimTimer.unref?.();

@@ -187,10 +187,11 @@ export function createApp(deps: {
     }
     if (required && c.req.header("authorization") !== `Bearer ${required}`) return c.text("unauthorized\n", 401);
     const rows = await handle.raw<{
-      cleanup_failures: number; queued: number; leased: number; dead: number; active_vms: number; scheduler_lag: number;
+      model_estimated: number; cleanup_failures: number; queued: number; leased: number; dead: number; active_vms: number; scheduler_lag: number;
       vm_seconds: number; budget_exhaustions: number; expired_leases: number;
       failed_runs: number; vm_budget_violations: number; orphan_agent_rows: number;
     }>(`SELECT
+      (SELECT count(*)::int FROM artifacts WHERE kind='model.usage' AND body->>'status'='estimated') model_estimated,
       (SELECT count(*)::int FROM agents WHERE vm_id IS NOT NULL AND cleanup_error IS NOT NULL) cleanup_failures,
       (SELECT count(*)::int FROM jobs WHERE status='queued') queued,
       (SELECT count(*)::int FROM jobs WHERE status IN ('claimed','running')) leased,
@@ -208,10 +209,11 @@ export function createApp(deps: {
       (SELECT count(*)::int FROM events WHERE kind='agent.message' AND payload->>'type'='budget.exhausted') budget_exhaustions,
       (SELECT COALESCE(EXTRACT(EPOCH FROM now()-min(next_run_at)),0)::int FROM schedules
         WHERE enabled=true AND deleted_at IS NULL AND next_run_at < now()) scheduler_lag`);
-    const m = rows[0] ?? { cleanup_failures: 0, queued: 0, leased: 0, dead: 0, active_vms: 0, scheduler_lag: 0,
+    const m = rows[0] ?? { model_estimated: 0, cleanup_failures: 0, queued: 0, leased: 0, dead: 0, active_vms: 0, scheduler_lag: 0,
       vm_seconds: 0, budget_exhaustions: 0, expired_leases: 0, failed_runs: 0,
       vm_budget_violations: 0, orphan_agent_rows: 0 };
     return c.text([
+      "# TYPE kapi_model_estimated_usage gauge", `kapi_model_estimated_usage ${m.model_estimated}`,
       "# TYPE kapi_vm_cleanup_failures gauge", `kapi_vm_cleanup_failures ${m.cleanup_failures}`,
       "# TYPE kapi_queue_queued gauge", `kapi_queue_queued ${m.queued}`,
       "# TYPE kapi_queue_leased gauge", `kapi_queue_leased ${m.leased}`,

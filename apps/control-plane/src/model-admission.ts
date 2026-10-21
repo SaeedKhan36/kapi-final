@@ -38,12 +38,38 @@ export async function reserveModelCall(handle: DbHandle, runId: string, userId: 
   });
 }
 
-/** Unknown provider usage is conservatively charged at the reserved amount. */
-export async function settleModelCall(handle: DbHandle, id: string, actualTokens?: number) {
+type UsageReceipt={runId:string;tokens:number;status:"estimated"|"actual";evidence?:string};
+
+/** Settlement is idempotent; a late measured response can replace a conservative estimate. */
+export async function settleModelCall(handle: DbHandle, id: string, actualTokens?: number, evidence?: string) {
+  if(actualTokens!==undefined&&(!Number.isSafeInteger(actualTokens)||actualTokens<0))throw new Error("invalid token usage");
   await handle.transaction(async (tx) => {
-    const rows = await tx<{run_id:string;tokens:number}>(`DELETE FROM model_reservations WHERE id=$1 RETURNING run_id,tokens`, [id]);
-    if (!rows[0]) return;
-    await tx(`UPDATE runs SET llm_tokens=llm_tokens+$2 WHERE id=$1`,
-      [rows[0].run_id,actualTokens ?? Number(rows[0].tokens)]);
+    await tx(`SELECT id FROM admission_locks WHERE id='model' FOR UPDATE`);
+    const reservations=await tx<{run_id:string;tokens:number}>(`SELECT run_id,tokens FROM model_reservations WHERE id=$1 FOR UPDATE`,[id]);
+    const saved=await tx<{body:UsageReceipt}>(`SELECT body FROM artifacts WHERE id=$1 FOR UPDATE`,[`model_usage_${id}`]);
+    const old=saved[0]?.body;const reservation=reservations[0];
+    if(old?.status==="actual"||(!old&&!reservation))return;
+    const runId=old?.runId??reservation!.run_id;
+    const tokens=actualTokens??old?.tokens??Number(reservation!.tokens);
+    const receipt:UsageReceipt={runId,tokens,status:actualTokens===undefined?"estimated":"actual",...(evidence?{evidence}:{})};
+    await tx(`UPDATE runs SET llm_tokens=llm_tokens+$2 WHERE id=$1`,[runId,tokens-(old?.tokens??0)]);
+    await tx(`INSERT INTO artifacts(id,run_id,kind,body) VALUES($1,$2,'model.usage',$3)
+      ON CONFLICT(id) DO UPDATE SET body=EXCLUDED.body,created_at=now()`,[`model_usage_${id}`,runId,JSON.stringify(receipt)]);
+    await tx(`DELETE FROM model_reservations WHERE id=$1`,[id]);
   });
+}
+
+/** Expiry frees no budget: move unknown spend into an auditable conservative charge. */
+export async function settleExpiredModelCalls(handle:DbHandle):Promise<number>{
+  const rows=await handle.raw<{id:string}>(`SELECT id FROM model_reservations WHERE expires_at<now() LIMIT 100`);
+  for(const row of rows)await settleModelCall(handle,row.id);
+  return rows.length;
+}
+
+/** Operator-only reconciliation requires externally obtained usage evidence. */
+export async function reconcileModelUsage(handle:DbHandle,id:string,tokens:number,evidence:string){
+  if(!evidence.trim())throw new Error("provider usage evidence is required");
+  const rows=await handle.raw(`SELECT id FROM artifacts WHERE id=$1 AND kind='model.usage'`,[`model_usage_${id}`]);
+  if(!rows.length)throw new Error("settled usage receipt not found");
+  await settleModelCall(handle,id,tokens,evidence);
 }

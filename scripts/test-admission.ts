@@ -1,4 +1,4 @@
-import { reserveModelCall, settleModelCall, ModelAdmissionError } from "../apps/control-plane/src/model-admission.ts";
+import { reserveModelCall, settleModelCall, ModelAdmissionError, settleExpiredModelCalls, reconcileModelUsage } from "../apps/control-plane/src/model-admission.ts";
 import { createTestDb } from "./test-db.ts";
 import { seedRun, seedSiblingRun } from "./seed.ts";
 import { assert, equal, test, report } from "./harness.ts";
@@ -32,6 +32,15 @@ try {
     await h.raw(`UPDATE model_reservations SET expires_at=now()-interval '1 second' WHERE id=$1`,[a.id]);
     let denied=false;try{await reserveModelCall(h,s.runId,s.userId,20);}catch(e){denied=e instanceof ModelAdmissionError&&!e.busy;}
     assert(denied,"crash does not refund unknown provider usage");
+  });
+  await test("expired estimates can be reconciled exactly once with late provider usage",async()=>{
+    const s=await seedRun(h);const call=await reserveModelCall(h,s.runId,s.userId,90);
+    await h.raw(`UPDATE model_reservations SET expires_at=now()-interval '1 second' WHERE id=$1`,[call.id]);
+    await settleExpiredModelCalls(h);
+    let rows=await h.raw<{llm_tokens:number}>(`SELECT llm_tokens FROM runs WHERE id=$1`,[s.runId]);equal(Number(rows[0]!.llm_tokens),90);
+    await reconcileModelUsage(h,call.id,30,"provider-request-fixture");
+    await settleModelCall(h,call.id,30);await settleModelCall(h,call.id);
+    rows=await h.raw<{llm_tokens:number}>(`SELECT llm_tokens FROM runs WHERE id=$1`,[s.runId]);equal(Number(rows[0]!.llm_tokens),30);
   });
 } finally { await db.close(); }
 report();

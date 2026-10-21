@@ -144,7 +144,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
         outputTokens: result.usage?.outputTokens ?? 0,
         totalTokens: result.usage?.totalTokens ?? 0,
       };
-      await settleModelCall(handle, reservation.id, usage.totalTokens);
+      await settleModelCall(handle, reservation.id, result.usage?.totalTokens);
 
       const response: ModelResponse = {
         text: result.text ?? "",

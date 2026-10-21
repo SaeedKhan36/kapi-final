@@ -46,7 +46,8 @@
     "restore:workspace": "tsx scripts/restore-workspace.ts",
     "test:load:local": "pnpm build:agent && tsx scripts/load-local-fleet.ts",
     "test:admission": "tsx scripts/test-admission.ts && tsx scripts/test-provision-capacity.ts",
-    "test:live:local": "tsx scripts/probe-local-lifecycle.ts"
+    "test:live:local": "tsx scripts/probe-local-lifecycle.ts",
+    "reconcile:model": "tsx scripts/reconcile-model-usage.ts"
   },
   "devDependencies": {
     "@hono/node-server": "^1.13.7",
