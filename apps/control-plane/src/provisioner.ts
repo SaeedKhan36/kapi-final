@@ -5,7 +5,7 @@ import { mintJobToken, resolveAll } from "@kapi/identity";
 import { AGENT_ENV, newId, type Job } from "@kapi/protocol";
 import { toJob, type JobRow } from "@kapi/queue";
 import { JOB_COLUMNS } from "@kapi/queue";
-import { createVmProvider, type ProviderName, type VmProvider } from "@kapi/vm";
+import { createVmProvider, type ProviderName, type VmProvider, type VmSpec, type Vm } from "@kapi/vm";
 import { appendEvent } from "@kapi/queue";
 import { log } from "./log.ts";
 import { positiveLimit } from "./model-admission.ts";
@@ -38,6 +38,7 @@ export type ProvisionerOptions = {
   intervalMs?: number;
   /** How long a created VM may go without claiming its queued job. */
   provisioningTimeoutMs?: number;
+  createTimeoutMs?: number;
   /** Delay before retrying a job whose prior VM failed to provision. */
   retryDelayMs?: number;
   /** Where the agent dials back to. Must be reachable FROM the VM. */
@@ -216,6 +217,23 @@ export class Provisioner {
     return url;
   }
 
+  async #createVm(spec:VmSpec,jobId:string,reservationId:string):Promise<Vm>{
+    let expired=false;let timer:ReturnType<typeof setTimeout>|undefined;
+    const creation=this.#provider.create(spec);
+    void creation.then(async vm=>{
+      if(!expired)return;
+      // A late response finally supplies an authoritative ID: retain it for cleanup, never start its agent.
+      const rows=await this.handle.raw(`UPDATE agents SET vm_id=$2,status='provision-timeout',stopped_at=now()
+        WHERE job_id=$1 AND reservation_id=$3 AND vm_id=$3 RETURNING job_id`,[jobId,vm.id,reservationId]);
+      if(rows.length)this.#started.set(jobId,vm.id);
+      else await this.#provider.destroy(vm.id);
+    }).catch(()=>{});
+    try{return await Promise.race([creation,new Promise<Vm>((_,reject)=>{
+      timer=setTimeout(()=>{expired=true;reject(new Error("provider create response timed out"));},
+        this.opts.createTimeoutMs??Number(process.env.KAPI_PROVIDER_CREATE_TIMEOUT_MS??120_000));
+    })]);}finally{if(timer)clearTimeout(timer);}
+  }
+
   /** Creates the VM, installs the agent, and starts it. */
   async provision(job: Job): Promise<string> {
     const url = this.#publicUrl();
@@ -260,10 +278,10 @@ export class Provisioner {
       if (!hasCapacity) return [];
 
       return tx<{ job_id: string }>(
-        `INSERT INTO agents (job_id, run_id, role, status, vm_id, provider, last_heartbeat)
-         VALUES ($1, $2, $3, 'provisioning', $4, $5, now())
+        `INSERT INTO agents (job_id, run_id, role, status, vm_id, provider, last_heartbeat,reservation_id)
+         VALUES ($1, $2, $3, 'provisioning', $4, $5, now(),$4)
          ON CONFLICT (job_id) DO UPDATE
-           SET status = 'provisioning', vm_id = EXCLUDED.vm_id,
+           SET status = 'provisioning', vm_id = EXCLUDED.vm_id, reservation_id=EXCLUDED.reservation_id,
                stopped_at = NULL, last_heartbeat = now()
            WHERE agents.stopped_at IS NOT NULL AND (agents.vm_id IS NULL OR agents.provider IS NULL)
          RETURNING job_id`,
@@ -279,7 +297,7 @@ export class Provisioner {
 
     let vm;
     try {
-      vm = await this.#provider.create({
+      vm = await this.#createVm({
         name: `kapi-${job.id}`,
         image: job.payload.vmSpec?.image,
         cpus: job.payload.vmSpec?.cpus,
@@ -289,6 +307,7 @@ export class Provisioner {
         idleTtlSeconds: idleTtl,
         metadata: {
           jobId: job.id,
+          reservationId: vmId,
           runId: job.runId,
           planeId: process.env.KAPI_PLANE_ID ?? "default",
         },
@@ -301,9 +320,11 @@ export class Provisioner {
           [AGENT_ENV.vmId]: vmId,
           [AGENT_ENV.role]: job.role,
         },
-      });
+      },job.id,vmId);
     } catch (err) {
-      await this.#release(job.id, "provision-failed", true);
+      // The provider may have committed creation before losing its response.
+      // Hold capacity until inventory resolves this exact reservation.
+      await this.handle.raw(`UPDATE agents SET status='provision-unknown' WHERE job_id=$1 AND reservation_id=$2 AND status='provisioning'`,[job.id,vmId]);
       // Provider errors may contain request bodies or CLI arguments with secrets.
       throw new Error(`VM provisioning failed (${this.#provider.name}); inspect provider-side diagnostics`);
     }
@@ -391,19 +412,19 @@ export class Provisioner {
     const timeoutMs = this.opts.provisioningTimeoutMs ??
       Number(process.env.KAPI_PROVISION_TIMEOUT_SECONDS ?? 120) * 1000;
     const cutoff = new Date(+now - timeoutMs);
-    const rows = await this.handle.raw<{ job_id: string; vm_id: string | null }>(
+    const rows = await this.handle.raw<{ job_id: string; vm_id: string | null; reservation_id:string|null }>(
       `UPDATE agents a SET status = 'provision-timeout', stopped_at = $1
        FROM jobs j
        WHERE a.job_id = j.id
-         AND a.status = 'provisioning' AND a.stopped_at IS NULL
+         AND a.status IN ('provisioning','provision-unknown') AND a.stopped_at IS NULL
          AND j.status = 'queued'
          AND COALESCE(a.last_heartbeat, a.started_at) <= $2
          AND ($3::text IS NULL OR a.run_id = $3::text) AND a.provider=$4
-       RETURNING a.job_id, a.vm_id`,
+       RETURNING a.job_id, a.vm_id,a.reservation_id`,
       [now.toISOString(), cutoff.toISOString(), this.opts.runId ?? null, this.#provider.name],
     );
     for (const row of rows) {
-      if (row.vm_id && await this.#destroyVm(row.job_id, row.vm_id)) {
+      if (row.vm_id && row.vm_id!==row.reservation_id && await this.#destroyVm(row.job_id, row.vm_id)) {
         await this.handle.raw(`UPDATE agents SET vm_id=NULL WHERE job_id=$1 AND vm_id=$2 AND stopped_at IS NOT NULL`, [row.job_id,row.vm_id]);
         this.#started.delete(row.job_id);
       }
@@ -451,7 +472,7 @@ export class Provisioner {
       `SELECT a.job_id, a.vm_id FROM agents a
        JOIN jobs j ON j.id = a.job_id
        WHERE a.vm_id IS NOT NULL AND a.stopped_at IS NOT NULL
-         AND a.provider=$1`,
+         AND a.vm_id IS DISTINCT FROM a.reservation_id AND a.provider=$1`,
       [this.#provider.name],
     );
     let destroyed = 0;

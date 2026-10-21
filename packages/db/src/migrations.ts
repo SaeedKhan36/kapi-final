@@ -88,6 +88,10 @@ export const MIGRATIONS: readonly Migration[] = [
     CREATE INDEX IF NOT EXISTS model_reservations_run_idx ON model_reservations(run_id);
     CREATE INDEX IF NOT EXISTS model_reservations_user_idx ON model_reservations(user_id,expires_at);
   ` },
+  {version:5,name:"durable-provider-reservations",sql:`
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS reservation_id TEXT;
+    CREATE INDEX IF NOT EXISTS agents_reservation_idx ON agents(reservation_id);
+  `},
 ];
 
 export async function runMigrations(handle: DbHandle): Promise<void> {

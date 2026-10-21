@@ -1,3 +1,4 @@
+import { DaytonaProvider } from "../packages/vm/src/providers/daytona.ts";
 import { mkdtemp, access, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,5 +43,12 @@ await test("cancellation kills a command and its background descendants",async()
     let exists=false;try{await access(join(dir,"late"));exists=true;}catch{}
     equal(exists,false,"descendant never writes after cancellation");
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+await test("Daytona startup failure deletes a known created sandbox",async()=>{
+  let deleted=0;
+  const sdk={create:async()=>({id:"created",process:{executeCommand:async()=>({exitCode:1,result:"init failure"})},delete:async()=>{deleted++;}})};
+  const provider=new DaytonaProvider("fixture",undefined,()=>sdk);
+  let failed=false;try{await provider.create({name:"fixture"});}catch{failed=true;}
+  equal(failed,true);equal(deleted,1);
 });
 report();

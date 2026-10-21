@@ -35,12 +35,26 @@ export class VmReconciler {
     try {
       const resources = await this.provider.listManaged();
       const owned = resources.filter((resource) => this.#isOwned(resource));
-      const active = await this.handle.raw<{ job_id: string; run_id: string; vm_id: string }>(
-        `SELECT job_id,run_id,vm_id FROM agents
-         WHERE provider=$1 AND vm_id IS NOT NULL AND stopped_at IS NULL`, [this.provider.name],
+      const tracked = await this.handle.raw<{ job_id: string; run_id: string; vm_id: string; reservation_id:string|null; status:string; stopped_at:unknown; last_heartbeat:string }>(
+        `SELECT job_id,run_id,vm_id,reservation_id,status,stopped_at,last_heartbeat FROM agents
+         WHERE provider=$1 AND vm_id IS NOT NULL`, [this.provider.name],
       );
-      const byId = new Map(active.map((a) => [a.vm_id, a]));
+      const byId = new Map(tracked.map((a) => [a.vm_id, a]));
       const found = new Map(owned.map((r) => [r.id, r]));
+      const matched=new Set<string>();
+      for(const resource of owned){
+        const reservation=tracked.find(a=>a.reservation_id&&a.vm_id===a.reservation_id&&
+          resource.metadata?.reservationId===a.reservation_id&&resource.metadata?.jobId===a.job_id&&resource.metadata?.runId===a.run_id);
+        if(!reservation)continue;
+        matched.add(reservation.job_id);
+        byId.set(resource.id,reservation);
+        // Do not disturb a create call that is still within its startup window.
+        const age=+now-new Date(reservation.last_heartbeat).getTime();
+        if(reservation.status==="provisioning"&&!reservation.stopped_at&&age<Number(process.env.KAPI_PROVISION_TIMEOUT_SECONDS??120)*1000)continue;
+        await this.handle.raw(`UPDATE agents SET vm_id=$2,status='provision-timeout',stopped_at=now()
+          WHERE job_id=$1 AND reservation_id=$3 AND vm_id=$3`,[reservation.job_id,resource.id,reservation.reservation_id]);
+        log("warn","vm.ambiguous_creation_recovered",{jobId:reservation.job_id,vmId:resource.id});
+      }
       let orphaned = 0, destroyed = 0;
       for (const resource of owned) {
         if (byId.has(resource.id) || +now - resource.createdAt < this.graceMs) continue;
@@ -53,7 +67,17 @@ export class VmReconciler {
         }
       }
       let missing = 0;
-      for (const agent of active) {
+      for (const agent of tracked) {
+        if(agent.reservation_id&&agent.vm_id===agent.reservation_id){
+          if(matched.has(agent.job_id))continue;
+          const age=+now-new Date(agent.last_heartbeat).getTime();
+          // A healthy inventory after the grace window resolves an absent resource.
+          // Late resources remain labelled and are subsequently reclaimed as orphans.
+          if(age>=Math.max(this.graceMs,Number(process.env.KAPI_PROVISION_TIMEOUT_SECONDS??120)*1000))
+            await this.handle.raw(`UPDATE agents SET vm_id=NULL,status='provision-absent',stopped_at=now() WHERE job_id=$1 AND vm_id=$2`,[agent.job_id,agent.vm_id]);
+          continue;
+        }
+        if(agent.stopped_at)continue;
         const resource = found.get(agent.vm_id);
         const unhealthy = resource?.status != null &&
           /^(stopped|failed|error|destroyed|deleted|offline|exited|dead)$/i.test(resource.status);

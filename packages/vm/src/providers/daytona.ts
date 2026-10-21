@@ -23,6 +23,7 @@ export class DaytonaProvider implements VmProvider {
   constructor(
     private apiKey = process.env.DAYTONA_API_KEY,
     private apiUrl = process.env.DAYTONA_API_URL,
+    private clientFactory?: () => any,
   ) {}
 
   async isAvailable() {
@@ -37,6 +38,7 @@ export class DaytonaProvider implements VmProvider {
 
   async #sdk() {
     if (this.#client) return this.#client;
+    if(this.clientFactory)return this.#client=this.clientFactory();
     if (!this.apiKey) throw new VmError("DAYTONA_API_KEY is not set", this.name);
     let mod: any;
     try {
@@ -58,6 +60,7 @@ export class DaytonaProvider implements VmProvider {
 
   async create(spec: VmSpec): Promise<Vm> {
     const daytona = await this.#sdk();
+    let created:any;
     try {
       // Daytona rejects explicit resources when the sandbox comes from a
       // snapshot (the default path), so only send them alongside a custom image.
@@ -76,6 +79,7 @@ export class DaytonaProvider implements VmProvider {
         ) },
         ...resources,
       });
+      created=handle;
       const id = handle.id ?? handle.vmId;
       const workdir = spec.workdir ?? "/home/daytona/workspace";
 
@@ -91,6 +95,7 @@ export class DaytonaProvider implements VmProvider {
       this.#boxes.set(id, { handle, box });
       return box;
     } catch (cause) {
+      if(created){try{await(created.delete?.()??created.remove?.());}catch{ /* inventory will recover by reservation label */ }}
       throw new VmError("failed to create vm; inspect Daytona diagnostics", this.name);
     }
   }

@@ -444,7 +444,7 @@ await test("a finished job's VM is reclaimed", async () => {
     const rows = await handle.raw<{ n: string }>(
       `SELECT count(*)::text AS n FROM agents a JOIN jobs j ON j.id=a.job_id
        WHERE a.vm_id IS NOT NULL AND a.provider='local' AND a.stopped_at IS NULL
-         AND j.status NOT IN ('succeeded','failed','cancelled')`,
+         AND a.vm_id IS DISTINCT FROM a.reservation_id AND j.status NOT IN ('succeeded','failed','cancelled')`,
     );
     return Number(rows[0]?.n ?? 0) === 0 ? true : null;
   });
@@ -484,6 +484,35 @@ await test("local deletion is idempotent after provider resource loss", async ()
   const vm = await local.create({ name: "already-deleted" });
   await local.destroy(vm.id);
   assert(await local.destroyOrphan(vm.id), "confirmed absence permits cleanup to release capacity");
+});
+
+await test("ambiguous create is adopted by its reservation label before another VM can start",async()=>{
+  const s=await seedRun(handle);const job=await echoJob(s.runId);
+  class LostResponse extends LocalProvider{override async create(spec:VmSpec):Promise<Vm>{await super.create(spec);throw Error("provider lost response");}}
+  const provider=new LostResponse();const p=new Provisioner(handle,{provider,publicUrl:base,runId:s.runId,onLog:()=>{}});
+  try{
+    try{await p.provision(job);}catch{}
+    equal((await provider.listManaged()).filter(x=>x.metadata?.jobId===job.id).length,1);
+    equal((await p.tick()).length,0,"unknown resource holds its slot");
+    await new VmReconciler(handle,provider).reconcile();
+    await p.reclaim();
+    equal((await provider.listManaged()).filter(x=>x.metadata?.jobId===job.id).length,0,"actual ambiguous resource removed");
+    const rows=await handle.raw<{vm_id:string|null}>(`SELECT vm_id FROM agents WHERE job_id=$1`,[job.id]);equal(rows[0]?.vm_id,null);
+  }finally{await provider.destroyAll();}
+});
+
+await test("a late provider response is retained for deletion and never starts an agent",async()=>{
+  const s=await seedRun(handle);const job=await echoJob(s.runId);
+  class SlowCreate extends LocalProvider{override async create(spec:VmSpec):Promise<Vm>{await sleep(40);return super.create(spec);}}
+  const provider=new SlowCreate();const p=new Provisioner(handle,{provider,publicUrl:base,runId:s.runId,createTimeoutMs:1,onLog:()=>{}});
+  try{
+    let failed=false;try{await p.provision(job);}catch{failed=true;}assert(failed,"bounded create timeout");
+    await sleep(100);
+    const rows=await handle.raw<{vm_id:string;reservation_id:string;status:string}>(`SELECT vm_id,reservation_id,status FROM agents WHERE job_id=$1`,[job.id]);
+    assert(rows[0]!.vm_id!==rows[0]!.reservation_id,"late provider ID retained");equal(rows[0]!.status,"provision-timeout");
+    await p.reclaim();equal((await provider.listManaged()).filter(x=>x.metadata?.jobId===job.id).length,0);
+    equal((await getJob(handle,job.id))?.status,"queued","late resource never claimed work");
+  }finally{await provider.destroyAll();}
 });
 
 group("surviving a lost VM");
