@@ -1,4 +1,5 @@
-import { openPullRequest } from "@kapi/agent-core";
+import type { Checkpoint, ModelResponse } from "@kapi/protocol";
+import { openPullRequest, runLoop, type ToolContext } from "@kapi/agent-core";
 import { test, equal, report } from "./harness.ts";
 await test("PR replay reconciles a lost create response by branch and base", async () => {
   const original=globalThis.fetch;let created=false;let posts=0;
@@ -12,5 +13,21 @@ await test("PR replay reconciles a lost create response by branch and base", asy
     equal((await openPullRequest("fixture",{owner:"test",repo:"repo"},args)).number,1);
     equal(posts,1,"no second PR creation request");
   }finally{globalThis.fetch=original;}
+});
+const ctx:ToolContext={cwd:"/tmp",jobId:"journal-job",runId:"journal-run",log:()=>{},gitCredentials:async()=>{throw Error("unused");},askCaptain:async()=>null};
+const response:ModelResponse={text:"",toolCalls:[{toolCallId:"one",toolName:"run_command",input:{}},{toolCallId:"done",toolName:"finish",input:{summary:"done"}}],finishReason:"tool-calls",usage:{inputTokens:1,outputTokens:1,totalTokens:2},provider:"fixture",modelId:"fixture",budgetExhausted:false};
+await test("restart resumes persisted tool decisions and never blindly repeats an interrupted command",async()=>{
+  let saved:Checkpoint|undefined;let executions=0;
+  const tools=[{name:"run_command",description:"",inputSchema:{},run:async()=>{executions++;return{output:"external action"};}},
+    {name:"finish",description:"",inputSchema:{},terminal:true,run:async()=>({output:"done"})}];
+  try {await runLoop({system:"",brief:"",ctx,tools,callModel:async()=>response,
+    onCheckpoint:async c=>{if(c.pending?.next===1)throw Error("VM lost before result acknowledgement");saved=structuredClone(c);}});}catch{}
+  equal(executions,1);
+  const result=await runLoop({system:"",brief:"",ctx,tools,resumeFrom:saved,callModel:async()=>{throw Error("must resume saved decision");}});
+  equal(result.ok,true);equal(executions,1,"uncertain external command was not replayed");
+});
+await test("completed terminal checkpoint reports success without another model call",async()=>{
+  const result=await runLoop({system:"",brief:"",ctx,tools:[],resumeFrom:{step:2,messages:[],summary:"",commits:[],filesTouched:[],finished:true,resultSummary:"already done"},callModel:async()=>{throw Error("no new model call");}});
+  equal(result.ok,true);equal(result.summary,"already done");
 });
 report();

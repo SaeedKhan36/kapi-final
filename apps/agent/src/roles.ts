@@ -174,7 +174,7 @@ export const captainRole: RoleHandler = async (rc) => {
       maxOutputTokens: req.maxOutputTokens ?? 8192,
     }),
     onCheckpoint: async (checkpoint: Checkpoint) => {
-      await client.saveCheckpoint(checkpoint).catch(() => {});
+      await client.saveCheckpoint(checkpoint);
     },
   });
 
@@ -373,7 +373,7 @@ export const reviewRole: RoleHandler = async (rc) => {
       maxOutputTokens: req.maxOutputTokens ?? 8192,
     }),
     onCheckpoint: async (checkpoint: Checkpoint) => {
-      await client.saveCheckpoint({ ...checkpoint, branch: targetBranch }).catch(() => {});
+      await client.saveCheckpoint({ ...checkpoint, branch: targetBranch });
     },
   });
 

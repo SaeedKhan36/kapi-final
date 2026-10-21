@@ -402,7 +402,8 @@ await test("checkpoints are written each step and can resume the loop", async ()
     onCheckpoint: async (c) => { saved.push(structuredClone(c)); },
   });
   equal(cut.ok, false, "the first attempt was cut off");
-  equal(saved.length, 2, "a checkpoint per step");
+  equal(saved.filter(c=>!(c as {pending?:unknown}).pending).length, 2, "each completed step is checkpointed");
+  assert(saved.some(c=>(c as {pending?:{started:boolean}}).pending?.started), "intent saved before tools");
 
   const resumed = scriptedModel([{ tool: "finish", input: { summary: "finished after resume" } }]);
   const outcome = await runLoop({

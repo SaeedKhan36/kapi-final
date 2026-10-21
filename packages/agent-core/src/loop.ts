@@ -110,23 +110,26 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   const filesTouched = new Set(resumeFrom?.filesTouched ?? []);
   const commits = [...(resumeFrom?.commits ?? [])];
   let branch = resumeFrom?.branch;
-  let prUrl: string | undefined;
-  let terminalMeta: Record<string, unknown> | undefined;
+  let prUrl = resumeFrom?.prUrl;
+  let terminalMeta = resumeFrom?.terminalMeta;
 
   if (resumeFrom?.messages?.length) {
     ctx.log(`resuming from step ${step} with ${messages.length} message(s)`, { resumed: true });
   }
 
-  let summary = "";
-  let finished = false;
+  let summary = resumeFrom?.resultSummary ?? "";
+  let finished = resumeFrom?.finished ?? false;
+  let pending = resumeFrom?.pending;
+  const checkpoint = async () => onCheckpoint?.({step,messages,summary:"",branch,commits,
+    filesTouched:[...filesTouched],pending,finished,resultSummary:summary,prUrl,terminalMeta});
   let stopped: string | null = null;
 
-  while (step < maxSteps && !finished) {
+  while ((step < maxSteps || pending) && !finished) {
     if (!alive()) { stopped = "lease lost or job cancelled"; break; }
-    step++;
+    if (!pending) step++;
 
     const compacted = compact(messages, keepFullSteps);
-    messages = compacted.messages;
+    if (!pending) messages = compacted.messages;
 
     // Near the cap, ask for a landing rather than more work. An agent cut off
     // mid-thought leaves a branch nobody can interpret.
@@ -143,7 +146,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
 
     let response;
     try {
-      response = await callModel({ tier, system, messages: prompt, tools: wireTools });
+      response = pending?.response ?? await callModel({ tier, system, messages: prompt, tools: wireTools });
     } catch (err) {
       stopped = err instanceof Error ? err.message : String(err);
       ctx.log(`model call failed at step ${step}: ${stopped}`);
@@ -159,11 +162,12 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         role: "user",
         content: "Call a tool to make progress, or call finish if the task is complete.",
       });
+      await checkpoint();
       if (response.budgetExhausted) { stopped = "run budget exhausted"; break; }
       continue;
     }
 
-    messages.push({
+    if (!pending) messages.push({
       role: "assistant",
       content: [
         ...(response.text ? [{ type: "text", text: response.text }] : []),
@@ -176,12 +180,19 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       ],
     });
 
-    const results: unknown[] = [];
-    for (const call of response.toolCalls) {
+    if (!pending) {
+      pending = {response,next:0,started:false,results:[]};
+      await checkpoint(); // Save model intent before any external effect.
+    }
+    const results = pending.results;
+    for (const call of response.toolCalls.slice(pending.next)) {
+      if (!alive()) { stopped="lease lost or job cancelled"; break; }
       const tool = byName.get(call.toolName);
       if (!tool) {
         results.push(toolResult(call.toolCallId, call.toolName,
           `ERROR: no such tool "${call.toolName}".`));
+        pending.next++;
+        await checkpoint();
         continue;
       }
 
@@ -189,9 +200,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       const input = (call.input ?? {}) as Record<string, unknown>;
       ctx.log(`${call.toolName}`, { step, tool: call.toolName, input: preview(input) });
 
+      const interrupted = pending.started;
+      pending.started = true;
+      await checkpoint();
       let outcome;
       try {
-        outcome = await tool.run(input, ctx);
+        // Arbitrary shell/test commands may affect external services. Never blindly replay an interrupted one.
+        outcome = interrupted && ["run_command","run_tests"].includes(tool.name)
+          ? {ok:false,output:"Interrupted action: execution status is unknown. It was not replayed. Inspect and reconcile its effects before issuing a new command."}
+          : await tool.run(input, ctx);
       } catch (err) {
         // A throwing tool must not kill the job. The agent is told and can
         // route around it, which is what a human engineer would do.
@@ -211,13 +228,15 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         summary = String(input.summary ?? outcome.output);
         terminalMeta = outcome.meta;
       }
+      pending.next++;
+      pending.started=false;
+      await checkpoint(); // Result and its workspace become durable together.
+      if (finished) break;
     }
-
+    if (stopped) break;
     messages.push({ role: "tool", content: results });
-    await onCheckpoint?.({
-      step, messages, summary: compacted.summary,
-      branch, commits, filesTouched: [...filesTouched],
-    });
+    pending = undefined;
+    await checkpoint();
 
     if (response.budgetExhausted && !finished) {
       stopped = "run budget exhausted";
