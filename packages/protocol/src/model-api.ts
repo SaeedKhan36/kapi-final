@@ -62,8 +62,19 @@ export const ModelResponseSchema = z.object({
 });
 export type ModelResponse = z.infer<typeof ModelResponseSchema>;
 
+export const WorkspaceSnapshotSchema = z.object({
+  baseCommit: z.string().regex(/^[a-f0-9]{40,64}$/),
+  headCommit: z.string().regex(/^[a-f0-9]{40,64}$/),
+  bundle: z.string().optional(),
+  stagedPatch: z.string(),
+  workingPatch: z.string(),
+  untracked: z.array(z.object({ path: z.string(), data: z.string(), executable: z.boolean() })),
+});
+export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>;
+
 /** Loop state persisted to the plane so a requeued job resumes on a new VM. */
 export const CheckpointSchema = z.object({
+  workspace: WorkspaceSnapshotSchema.optional(),
   step: z.number().int().nonnegative(),
   messages: z.array(ModelMessageSchema),
   /** Compacted summary of steps whose full text has been dropped. */

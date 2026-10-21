@@ -195,12 +195,8 @@ export function createModelProxy(deps: { handle: DbHandle }) {
     await handle.raw(
       `INSERT INTO artifacts (id, run_id, job_id, kind, body)
        VALUES ($1, $2, $3, 'checkpoint', $4)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body, created_at=now()`,
       [`ckpt_${jobId}`, runId, jobId, JSON.stringify(parsed.data)],
-    );
-    await handle.raw(
-      `UPDATE artifacts SET body = $2, created_at = now() WHERE id = $1`,
-      [`ckpt_${jobId}`, JSON.stringify(parsed.data)],
     );
     return c.json({ ok: true, step: parsed.data.step });
   });

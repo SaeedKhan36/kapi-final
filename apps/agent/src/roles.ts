@@ -8,7 +8,7 @@ import {
 import {
   BUILD_SYSTEM, BUILD_TOOLS, buildBrief, CAPTAIN_SYSTEM, CAPTAIN_TOOLS, captainBrief,
   REVIEW_SYSTEM, REVIEW_TOOLS, changedFiles, commitsOnBranch, prepareRepo,
-  reviewBrief, runLoop, verdictFromOutcome,
+  reviewBrief, runLoop, verdictFromOutcome, captureWorkspace, restoreWorkspace,
   type FleetOps, type GitCredentials, type ToolContext,
 } from "@kapi/agent-core";
 import type { PlaneClient } from "./client.ts";
@@ -241,7 +241,11 @@ export const buildRole: RoleHandler = async (rc) => {
   client.log(prepared.detail, { branch: prepared.branch });
 
   // A resumed job continues rather than redoing work the run already paid for.
-  const resumeFrom = await client.loadCheckpoint().catch(() => null);
+  const saved = await client.loadCheckpoint();
+  // Legacy transcript-only checkpoints cannot safely describe a fresh checkout.
+  const resumeFrom = saved?.workspace ? saved : null;
+  if (saved && !resumeFrom) client.log("discarding legacy checkpoint without workspace state");
+  if (resumeFrom?.workspace) await restoreWorkspace(cwd, resumeFrom.workspace, prepared.branch);
 
   const brief = context.brief ?? buildBrief({
     instruction: job.payload.instruction,
@@ -267,9 +271,9 @@ export const buildRole: RoleHandler = async (rc) => {
       maxOutputTokens: req.maxOutputTokens ?? 8192,
     }),
     onCheckpoint: async (checkpoint: Checkpoint) => {
-      // Best effort. Losing a checkpoint costs a resumed job some repeated
-      // work; failing the job over it would cost all of it.
-      await client.saveCheckpoint({ ...checkpoint, branch: prepared.branch }).catch(() => {});
+      const workspace = await captureWorkspace(cwd, context.baseBranch ?? creds?.baseBranch ?? "main", resumeFrom?.workspace?.baseCommit);
+      // Persist workspace and transcript together. Failure must not advance a transcript-only checkpoint.
+      await client.saveCheckpoint({ ...checkpoint, branch: prepared.branch, workspace });
     },
   });
 
