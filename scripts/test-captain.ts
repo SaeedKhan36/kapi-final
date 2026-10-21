@@ -696,6 +696,14 @@ await test("a refused spawn is reported to the model rather than thrown", async 
   );
 });
 
+await test("lost spawn responses replay one durable receipt without duplicating children", async () => {
+  const cap = await captainOnRun();
+  const body = { requestId: "stable-tool-call", agents: [{ kind: "build", role: "backend", instruction: "only once" }] };
+  const requests = await Promise.all(Array.from({length:8}, () => cap.call<AgentSpawnResponse>("POST", "/agent/spawn", body)));
+  equal(new Set(requests.map(r=>r.spawned[0]?.jobId)).size,1,"one stable child ID");
+  equal((await listJobs(handle,cap.ctx.runId)).length,2,"only captain and one child");
+});
+
 await hub.close();
 await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 await testDb.close();

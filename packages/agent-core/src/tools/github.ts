@@ -13,6 +13,17 @@ export async function openPullRequest(
   ref: RepoRef,
   body: { head: string; base: string; title: string; body: string },
 ): Promise<{ html_url: string; number: number }> {
+  const endpoint = `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls`;
+  const headers = { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" };
+  const existing = async () => {
+    const query = new URLSearchParams({ state: "all", head: `${ref.owner}:${body.head}`, base: body.base });
+    const response = await fetch(`${endpoint}?${query}`, { headers });
+    if (!response.ok) throw new Error(`GitHub lookup failed: ${response.status}`);
+    const prs = await response.json() as Array<{html_url:string;number:number}>;
+    return prs[0];
+  };
+  const found = await existing();
+  if (found) return found;
   const res = await fetch(
     `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls`,
     {
@@ -28,6 +39,8 @@ export async function openPullRequest(
 
   const text = await res.text();
   if (!res.ok) {
+    // A competing retry may have created the same PR after our lookup.
+    if (res.status === 422) { const found = await existing(); if (found) return found; }
     // GitHub returns 422 with a useful message for the common cases: no commits
     // between branches, or a PR that already exists.
     let detail = text.slice(0, 400);

@@ -87,7 +87,7 @@ function toolContext(
 function fleetOps(client: PlaneClient): FleetOps {
   let inboxCursor = 0;
   return {
-    spawn: (agents) => client.spawn(agents),
+    spawn: (agents, requestId) => client.spawn(agents, requestId),
     children: () => client.children(),
     cancelChild: async (jobId, reason) => (await client.cancelChild(jobId, reason)).cancelled,
     sendTo: async (address, content) => {

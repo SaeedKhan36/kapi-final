@@ -113,6 +113,7 @@ export type SpawnRequest = z.infer<typeof SpawnRequestSchema>;
 
 /** A batch, so a captain can fan out in a single turn rather than N turns. */
 export const AgentSpawnRequestSchema = z.object({
+  requestId: z.string().min(1).max(200).optional(),
   agents: z.array(SpawnRequestSchema).min(1).max(20),
 });
 export type AgentSpawnRequest = z.infer<typeof AgentSpawnRequestSchema>;

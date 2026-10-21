@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
 import { JobTokenError, verifyJobToken, type JobTokenClaims } from "@kapi/identity";
 import {
   AgentCancelRequestSchema, AgentCompleteRequestSchema, AgentEventsRequestSchema,
   AgentSpawnRequestSchema, agentId, isJobTerminal, normaliseVerdict,
-  type AgentChild, type AgentInboxMessage, type EventKind,
+  type AgentChild, type AgentInboxMessage, type EventKind, type AgentSpawnResponse,
   type SpawnedAgent, type SpawnRefusal,
 } from "@kapi/protocol";
 import {
@@ -276,6 +277,16 @@ export function createAgentApi(deps: {
       const run = rows[0];
       if (!run) return null;
 
+      const operationId = parsed.data.requestId
+        ? `spawn_${createHash("sha256").update(`${jobId}:${parsed.data.requestId}`).digest("hex")}` : null;
+      const fingerprint = createHash("sha256").update(JSON.stringify(parsed.data.agents)).digest("hex");
+      if (operationId) {
+        const saved = await tx<{body: {fingerprint:string;response:AgentSpawnResponse}}>(`SELECT body FROM artifacts WHERE id=$1`, [operationId]);
+        if (saved[0]) {
+          if (saved[0].body.fingerprint !== fingerprint) throw new Error("idempotency key reused with different spawn payload");
+          return { before: Number(run.event_seq), ...saved[0].body.response };
+        }
+      }
       const before = Number(run.event_seq);
       const totalSpawns = Number(run.total_spawns);
       const maxTotalSpawns = Number(run.max_total_spawns);
@@ -341,13 +352,16 @@ export function createAgentApi(deps: {
         });
       }
 
-      return {
+      const response = {
         before, spawned, refused,
         budget: {
           totalSpawns: totalSpawns + spawned.length, maxTotalSpawns,
           depth, maxSpawnDepth,
         },
       };
+      if (operationId) await tx(`INSERT INTO artifacts(id,run_id,job_id,kind,body) VALUES($1,$2,$3,'spawn.receipt',$4)`,
+        [operationId,runId,jobId,JSON.stringify({fingerprint,response})]);
+      return response;
     });
     if (!result) return c.json({ error: "run not found" }, 404);
 

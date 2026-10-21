@@ -183,7 +183,7 @@ export const spawnAgentsTool: AgentTool = {
       return { ok: false, output: `Agent ${empty + 1} has an empty instruction.` };
     }
 
-    const res = await fleet.spawn(agents);
+    const res = await fleet.spawn(agents, ctx.operationId);
 
     const parts: string[] = [];
     if (res.spawned.length > 0) {

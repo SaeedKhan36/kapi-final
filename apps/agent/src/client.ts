@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AgentChildrenResponse, AgentEventInput, AgentInboxMessage, AgentSpawnResponse,
   Checkpoint, EventKind, Job, JobResult, ModelRequest, ModelResponse, SpawnRequest,
@@ -132,8 +133,8 @@ export class PlaneClient {
    * the caller is a reasoning loop: "you may have two of the six you asked for"
    * is something it can act on, and an exception is not.
    */
-  spawn(agents: SpawnRequest[]) {
-    return this.#post<AgentSpawnResponse>("/agent/spawn", { agents });
+  spawn(agents: SpawnRequest[], requestId: string = randomUUID()) {
+    return this.#post<AgentSpawnResponse>("/agent/spawn", { agents, requestId });
   }
 
   children() {

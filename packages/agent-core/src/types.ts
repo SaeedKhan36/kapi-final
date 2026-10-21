@@ -7,6 +7,7 @@ import type {
 export type ToolContext = {
   /** Absolute path to the repository checkout. */
   cwd: string;
+  operationId?: string;
   jobId: string;
   runId: string;
   log: (message: string, extra?: Record<string, unknown>) => void;
@@ -30,7 +31,7 @@ export type ToolContext = {
 
 /** What an agent that commands other agents can do. All of it dials the plane. */
 export type FleetOps = {
-  spawn: (agents: SpawnRequest[]) => Promise<AgentSpawnResponse>;
+  spawn: (agents: SpawnRequest[], requestId?: string) => Promise<AgentSpawnResponse>;
   children: () => Promise<AgentChildrenResponse>;
   cancelChild: (jobId: string, reason?: string) => Promise<string[]>;
   /** Addresses a specific agent, e.g. answering a worker's question. */

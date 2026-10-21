@@ -185,6 +185,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         continue;
       }
 
+      ctx.operationId = `${ctx.jobId}:${step}:${call.toolCallId}`;
       const input = (call.input ?? {}) as Record<string, unknown>;
       ctx.log(`${call.toolName}`, { step, tool: call.toolName, input: preview(input) });
 
