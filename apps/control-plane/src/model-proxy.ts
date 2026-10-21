@@ -70,7 +70,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
    * shell; the plane has neither and should never pretend to.
    */
   app.post("/agent/model", async (c) => {
-    const { runId, jobId } = c.get("claims");
+    const { runId, jobId, vmId } = c.get("claims");
     const parsed = ModelRequestSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: "invalid model request", issues: parsed.error.issues }, 400);
@@ -114,8 +114,18 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       codexAccountId: codex?.accountId,
     });
 
+    const abort=new AbortController();
+    let checking=false;
+    const watch=setInterval(()=>{
+      if(checking)return;checking=true;
+      void getJob(handle,jobId).then(job=>{
+        if(!job||job.vmId!==vmId||!["claimed","running"].includes(job.status)||!job.leaseExpiresAt||+job.leaseExpiresAt<=Date.now())abort.abort();
+      }).catch(()=>abort.abort()).finally(()=>{checking=false;});
+    },1000);
+    watch.unref?.();
     try {
       const result = await router.generate({
+        abortSignal: AbortSignal.any([abort.signal,c.req.raw.signal]),
         tier: parsed.data.tier,
         system: parsed.data.system,
         messages: parsed.data.messages as ModelMessage[],
@@ -160,7 +170,7 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       // Every provider failed. The agent should land on what it has rather
       // than spin, so this is a plain error it can read and act on.
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 502);
-    }
+    } finally { clearInterval(watch); }
   });
 
   /* ----------------------------------------------------------------- */

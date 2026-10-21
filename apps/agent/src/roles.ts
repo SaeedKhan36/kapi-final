@@ -19,6 +19,7 @@ export type RoleContext = {
   workdir: string;
   /** False once the lease is lost or the job is cancelled. Check it in any loop. */
   alive: () => boolean;
+  signal?: AbortSignal;
 };
 
 export type RoleHandler = (ctx: RoleContext) => Promise<JobResult>;
@@ -44,6 +45,7 @@ function toolContext(
 ): ToolContext {
   return {
     cwd,
+    signal: rc.signal,
     jobId: rc.job.id,
     runId: rc.job.runId,
     log: (message, extra) => rc.client.log(message, extra),

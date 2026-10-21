@@ -1,3 +1,4 @@
+import { currentToolSignal } from "../cancellation.ts";
 import { spawn } from "node:child_process";
 import type { AgentTool, ToolContext } from "../types.ts";
 import { clamp } from "./fs.ts";
@@ -10,6 +11,8 @@ export type ShellResult = { exitCode: number; stdout: string; stderr: string };
 export function shell(
   cwd: string, command: string, timeoutMs = COMMAND_TIMEOUT_MS,
 ): Promise<ShellResult> {
+  const signal=currentToolSignal();
+  if(signal?.aborted) return Promise.resolve({exitCode:130,stdout:"",stderr:"cancelled before execution"});
   return new Promise((resolveShell) => {
     const child = spawn("bash", ["-lc", command], {
       cwd,
@@ -25,9 +28,15 @@ export function shell(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort",abort);
       resolveShell({ exitCode, stdout, stderr });
     };
 
+    const abort=()=>{
+      stderr += "\n[kapi] cancelled; process group killed\n";
+      try { if(process.platform!=="win32"&&child.pid)process.kill(-child.pid,"SIGKILL");else child.kill("SIGKILL"); }catch{}
+      finish(130);
+    };
     // Without this a hung `npm install` or a command waiting on stdin holds the
     // whole job until its lease expires.
     const timer = setTimeout(() => {
@@ -39,6 +48,8 @@ export function shell(
       finish(124);
     }, timeoutMs);
 
+    signal?.addEventListener("abort",abort,{once:true});
+    if(signal?.aborted)abort();
     child.stdout.on("data", (d) => { stdout = (stdout + String(d)).slice(-1_048_576); });
     child.stderr.on("data", (d) => { stderr = (stderr + String(d)).slice(-1_048_576); });
     child.on("error", (err) => { stderr += String(err); finish(127); });

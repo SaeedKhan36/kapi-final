@@ -1,3 +1,4 @@
+import { currentToolSignal } from "../cancellation.ts";
 import { parseGithubRepository as parseRepoUrl } from "@kapi/protocol";
 import type { AgentTool } from "../types.ts";
 import { branchName, scrub } from "./git.ts";
@@ -13,11 +14,13 @@ export async function openPullRequest(
   ref: RepoRef,
   body: { head: string; base: string; title: string; body: string },
 ): Promise<{ html_url: string; number: number }> {
+  const signal=currentToolSignal();
+  const requestSignal=()=>signal?AbortSignal.any([signal,AbortSignal.timeout(30_000)]):AbortSignal.timeout(30_000);
   const endpoint = `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls`;
   const headers = { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" };
   const existing = async () => {
     const query = new URLSearchParams({ state: "all", head: `${ref.owner}:${body.head}`, base: body.base });
-    const response = await fetch(`${endpoint}?${query}`, { headers });
+    const response = await fetch(`${endpoint}?${query}`, { headers, signal: requestSignal() });
     if (!response.ok) throw new Error(`GitHub lookup failed: ${response.status}`);
     const prs = await response.json() as Array<{html_url:string;number:number}>;
     return prs[0];
@@ -28,6 +31,7 @@ export async function openPullRequest(
     `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls`,
     {
       method: "POST",
+      signal: requestSignal(),
       headers: {
         authorization: `Bearer ${token}`,
         accept: "application/vnd.github+json",

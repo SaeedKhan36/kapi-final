@@ -28,14 +28,16 @@ if (!baseUrl || !token || !jobId) {
   process.exit(2);
 }
 
-const client = new PlaneClient(baseUrl, token, { onLog: say });
+const abort=new AbortController();
+process.once("SIGTERM",()=>abort.abort());process.once("SIGINT",()=>abort.abort());
+const client = new PlaneClient(baseUrl, token, { onLog: say, signal: abort.signal });
 
 /** Heartbeat well inside the lease so ordinary latency is not read as death. */
 const HEARTBEAT_MS = Number(env("KAPI_HEARTBEAT_MS") ?? 15_000);
 
 let leaseLost = false;
 let cancelled = false;
-const alive = () => !leaseLost && !cancelled;
+const alive = () => !leaseLost && !cancelled && !abort.signal.aborted;
 
 async function main() {
   say(`claiming ${jobId} at ${baseUrl}`);
@@ -51,28 +53,35 @@ async function main() {
   say(`claimed ${job.kind}/${job.role} - ${job.payload.instruction.slice(0, 80)}`);
   await client.start();
 
+  let leaseDeadline=new Date(job.leaseExpiresAt!).getTime();
+  const watchdog=setInterval(()=>{if(Date.now()>=leaseDeadline){leaseLost=true;abort.abort();}},500);
+  watchdog.unref?.();
+  let beating=false;
   const beat = setInterval(async () => {
+    if(beating)return;beating=true;
     try {
-      const { ok, cancelled: isCancelled } = await client.heartbeat();
+      const { ok, cancelled: isCancelled, leaseExpiresAt } = await client.heartbeat();
+      if(ok&&leaseExpiresAt)leaseDeadline=new Date(leaseExpiresAt).getTime();
       if (!ok) {
         // The reaper handed this job to another VM. Two agents doing the same
         // work would push the same branch twice, so this one stops.
-        leaseLost = true;
+        leaseLost = true;abort.abort();
         say("lease lost - another VM owns this job now, stopping");
       }
       if (isCancelled) {
-        cancelled = true;
+        cancelled = true;abort.abort();
         say("job was cancelled, stopping");
       }
     } catch (err) {
       say(`heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
     }
+    finally { beating=false; }
     void client.flush();
   }, HEARTBEAT_MS);
   beat.unref?.();
 
   try {
-    const result = await handlerFor(job.kind)({ job, client, workdir, alive });
+    const result = await handlerFor(job.kind)({ job, client, workdir, alive, signal: abort.signal });
     await client.flush();
 
     if (!alive()) {
@@ -106,7 +115,7 @@ async function main() {
     if (alive()) await client.failJob(message.slice(0, 4000)).catch(() => {});
     return 1;
   } finally {
-    clearInterval(beat);
+    clearInterval(beat);clearInterval(watchdog);
     await client.flush();
   }
 }

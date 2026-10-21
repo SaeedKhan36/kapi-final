@@ -1,3 +1,4 @@
+import { withToolSignal } from "./cancellation.ts";
 import type { Checkpoint, WireMessage } from "@kapi/protocol";
 import type { AgentTool, LoopOutcome, ModelCaller, ToolContext } from "./types.ts";
 
@@ -208,7 +209,7 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
         // Arbitrary shell/test commands may affect external services. Never blindly replay an interrupted one.
         outcome = interrupted && ["run_command","run_tests"].includes(tool.name)
           ? {ok:false,output:"Interrupted action: execution status is unknown. It was not replayed. Inspect and reconcile its effects before issuing a new command."}
-          : await tool.run(input, ctx);
+          : await withToolSignal(ctx.signal, () => tool.run(input, ctx));
       } catch (err) {
         // A throwing tool must not kill the job. The agent is told and can
         // route around it, which is what a human engineer would do.

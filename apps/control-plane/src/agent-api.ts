@@ -136,7 +136,7 @@ export function createAgentApi(deps: {
     const { jobId, vmId } = c.get("claims");
     const ok = await heartbeat(handle, jobId, vmId);
     const job = await getJob(handle, jobId);
-    return c.json({ ok, cancelled: job?.status === "cancelled" });
+    return c.json({ ok, cancelled: job?.status === "cancelled", leaseExpiresAt: job?.leaseExpiresAt?.toISOString() });
   });
 
   /**

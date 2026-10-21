@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentChildrenResponse, AgentEventInput, AgentInboxMessage, AgentSpawnResponse,
@@ -18,7 +19,7 @@ export class PlaneClient {
   constructor(
     private baseUrl: string,
     private token: string,
-    private opts: { retries?: number; onLog?: (line: string) => void } = {},
+    private opts: { retries?: number; onLog?: (line: string) => void; signal?: AbortSignal } = {},
   ) {}
 
   #log(line: string) { this.opts.onLog?.(line); }
@@ -33,17 +34,18 @@ export class PlaneClient {
    * away work that is otherwise fine.
    */
   async #request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const signal = ["/agent/claim","/agent/start","/agent/heartbeat","/agent/events","/agent/complete"].includes(path) ? undefined : this.opts.signal;
     const retries = this.opts.retries ?? 4;
     let lastError = "";
     const capacityDeadline = Date.now() + 180_000;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, Math.min(8000, 400 * 2 ** (attempt - 1))));
-      }
+      signal?.throwIfAborted();
+      if (attempt > 0) await delay(Math.min(8000,400*2**(attempt-1)),undefined,{signal});
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
           method,
+          signal: signal?AbortSignal.any([signal,AbortSignal.timeout(path==="/agent/model"?180_000:30_000)]):AbortSignal.timeout(30_000),
           headers: {
             authorization: `Bearer ${this.token}`,
             ...(body !== undefined ? { "content-type": "application/json" } : {}),
@@ -58,7 +60,7 @@ export class PlaneClient {
             // Capacity contention is not a transport failure and must not burn the network retry budget.
             // Heartbeats continue while this timer waits; cancellation is checked on the next request.
             lastError = "model capacity busy";
-            await new Promise((resolve) => setTimeout(resolve, 2000));
+            await delay(2000,undefined,{signal});
             attempt--;
             continue;
           }
@@ -73,6 +75,7 @@ export class PlaneClient {
         }
         return (text ? JSON.parse(text) : {}) as T;
       } catch (err) {
+        if (signal?.aborted) throw err;
         const message = err instanceof Error ? err.message : String(err);
         if (/^4\d\d /.test(message)) throw err;
         lastError = message;
@@ -89,7 +92,7 @@ export class PlaneClient {
   start() { return this.#post<{ ok: boolean }>("/agent/start", {}); }
 
   heartbeat() {
-    return this.#post<{ ok: boolean; cancelled: boolean }>("/agent/heartbeat", {});
+    return this.#post<{ ok: boolean; cancelled: boolean; leaseExpiresAt?: string }>("/agent/heartbeat", {});
   }
 
   inbox(after: number) {

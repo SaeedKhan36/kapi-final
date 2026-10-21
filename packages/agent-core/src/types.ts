@@ -8,6 +8,7 @@ export type ToolContext = {
   /** Absolute path to the repository checkout. */
   cwd: string;
   operationId?: string;
+  signal?: AbortSignal;
   jobId: string;
   runId: string;
   log: (message: string, extra?: Record<string, unknown>) => void;

@@ -20,5 +20,12 @@ try{
     terminal=true;const before=calls;let denied=false;try{await client.model(request);}catch{denied=true;}
     assert(denied,"terminal budget rejected");equal(calls,before+1);
   });
+  await test("cancellation interrupts a queued model retry",async()=>{
+    terminal=false;calls=0;const abort=new AbortController();
+    const cancelled=new PlaneClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`,"fixture",{signal:abort.signal});
+    const before=Date.now();setTimeout(()=>abort.abort(),100);
+    let denied=false;try{await cancelled.model(request);}catch{denied=true;}
+    assert(denied,"model wait aborted");assert(Date.now()-before<1000,"does not wait for retry timer");equal(calls,1);
+  });
 }finally{await new Promise<void>((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}
 report();
