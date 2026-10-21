@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { reserveModelCall, settleModelCall, ModelAdmissionError, positiveLimit } from "./model-admission.ts";
 import { Hono } from "hono";
 import { jsonSchema, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai";
@@ -7,7 +8,7 @@ import {
   type JobTokenClaims,
 } from "@kapi/identity";
 import {
-  CheckpointSchema, ModelRequestSchema, newId,
+  CheckpointSchema, ModelRequestSchema, WorkspaceSnapshotSchema, newId,
   type Checkpoint, type ModelResponse,
 } from "@kapi/protocol";
 import { getJob } from "@kapi/queue";
@@ -173,11 +174,37 @@ export function createModelProxy(deps: { handle: DbHandle }) {
    * one is gone. Storing the transcript here is what lets a resumed job
    * continue rather than start the work over and pay for it twice.
    */
+  app.put("/agent/workspace-chunks/:digest/:part", async (c) => {
+    const {runId,jobId}=c.get("claims");
+    const digest=c.req.param("digest"); const part=Number(c.req.param("part"));
+    const body=await c.req.json().catch(()=>null) as {data?:unknown}|null;
+    if(!/^[a-f0-9]{64}$/.test(digest)||!Number.isInteger(part)||part<0||part>=256||
+      typeof body?.data!=="string"||body.data.length>512*1024||!body.data.length||
+      Buffer.from(body.data,"base64").toString("base64")!==body.data) return c.json({error:"invalid workspace chunk"},400);
+    const rows=await handle.raw(`INSERT INTO artifacts(id,run_id,job_id,kind,body) VALUES($1,$2,$3,'workspace.chunk',$4)
+      ON CONFLICT(id) DO UPDATE SET body=artifacts.body WHERE artifacts.body=EXCLUDED.body RETURNING id`,
+      [`chunk_${jobId}_${digest}_${part}`,runId,jobId,JSON.stringify({data:body.data})]);
+    return rows.length?c.json({ok:true}):c.json({error:"chunk conflict"},409);
+  });
+
   app.put("/agent/checkpoint", async (c) => {
     const { runId, jobId } = c.get("claims");
     const parsed = CheckpointSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       return c.json({ error: "invalid checkpoint", issues: parsed.error.issues }, 400);
+    }
+    if (parsed.data.workspaceRef) {
+      if (parsed.data.workspace) return c.json({error:"supply workspace or reference, not both"},400);
+      const ref=parsed.data.workspaceRef;
+      const ids=Array.from({length:ref.parts},(_,i)=>`chunk_${jobId}_${ref.digest}_${i}`);
+      const chunks=await handle.raw<{id:string;body:{data:string}}>(`SELECT id,body FROM artifacts WHERE id=ANY($1) AND job_id=$2`,[ids,jobId]);
+      const byId=new Map(chunks.map(row=>[row.id,row.body.data]));
+      if(chunks.length!==ids.length) return c.json({error:"workspace upload incomplete"},409);
+      const bytes=Buffer.from(ids.map(id=>byId.get(id)!).join(""),"base64");
+      if(bytes.length!==ref.size||createHash("sha256").update(bytes).digest("hex")!==ref.digest) return c.json({error:"workspace checksum mismatch"},400);
+      const workspace=WorkspaceSnapshotSchema.safeParse(await Promise.resolve().then(()=>JSON.parse(bytes.toString("utf8"))).catch(()=>null));
+      if(!workspace.success) return c.json({error:"invalid workspace snapshot"},400);
+      parsed.data.workspace=workspace.data;
     }
     await handle.transaction(async (tx) => {
       await tx(

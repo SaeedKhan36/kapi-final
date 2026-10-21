@@ -8,8 +8,8 @@ import type { WorkspaceSnapshot } from "@kapi/protocol";
 import { insideRepo } from "./tools/fs.ts";
 
 const exec = promisify(execFile);
-// Checkpoint plus transcript must fit the API's default 2 MiB request limit.
-export const MAX_WORKSPACE_BYTES = 1_000_000;
+// Large exports travel in chunks; total decoded snapshots remain bounded.
+export const MAX_WORKSPACE_BYTES = 64 * 1024 * 1024;
 async function git(cwd: string, args: string[]) {
   return (await exec("git", args, { cwd, encoding: "utf8", maxBuffer: MAX_WORKSPACE_BYTES * 2,
     timeout: 30_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })).stdout;

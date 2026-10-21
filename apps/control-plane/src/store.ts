@@ -232,7 +232,7 @@ export class Store {
       this.listEvents(runId),
       this.h.raw<Record<string, unknown>>(
         `SELECT id,run_id,job_id,kind,created_at,
-         CASE WHEN kind IN ('checkpoint','workspace.export') THEN NULL ELSE body END AS body
+         CASE WHEN kind IN ('checkpoint','workspace.export','workspace.chunk') THEN NULL ELSE body END AS body
          FROM artifacts WHERE run_id = $1 ORDER BY created_at ASC`, [runId],
       ),
     ]);

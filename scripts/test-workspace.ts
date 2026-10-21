@@ -30,7 +30,7 @@ try {
       equal(await git(second, "status", "--porcelain"), await git(first, "status", "--porcelain"));
     });
     await test("oversized workspace fails instead of saving a misleading checkpoint", async () => {
-      await writeFile(join(first, "large.bin"), Buffer.alloc(1_000_001));
+      await writeFile(join(first, "large.bin"), Buffer.alloc(64*1024*1024+1));
       let failed = false; try { await captureWorkspace(first, "main"); } catch { failed = true; }
       assert(failed, "snapshot must refuse oversized data");
     });

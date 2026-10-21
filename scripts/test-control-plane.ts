@@ -1,3 +1,4 @@
+import { PlaneClient } from "../apps/agent/src/client.ts";
 import { loadEnv } from "@kapi/env";
 loadEnv();
 
@@ -953,6 +954,21 @@ await test("workspace export survives completion and enforces run ownership", as
   assert(downloaded.headers.get("content-disposition")?.includes("attachment"), "download attachment");
   equal((await downloaded.json() as { publication: string }).publication, "local");
   equal((await api("GET", `/api/runs/run_not_owned/jobs/${jobId}/workspace`)).status, 404, "ownership enforced");
+});
+
+await test("large workspace uses resumable chunks and rejects incomplete manifests", async () => {
+  const {runId:id,jobId}=await freshRun("large checkpoint");
+  await claim(handle,{vmId:"vm-large",jobId,runId:id});
+  const token=mintJobToken({jobId,runId:id,vmId:"vm-large"});
+  const client=new PlaneClient(base,token);
+  const data=Buffer.alloc(2*1024*1024,42).toString("base64");
+  await client.saveCheckpoint({step:1,messages:[],summary:"",commits:[],filesTouched:[],workspace:{publication:"local",baseCommit:"a".repeat(40),headCommit:"a".repeat(40),stagedPatch:"",workingPatch:"",untracked:[{path:"large.bin",data,executable:false}]}});
+  equal((await client.loadCheckpoint())?.workspace?.untracked[0]?.data,data,"large payload restored exactly");
+  const invalid=await fetch(`${base}/agent/checkpoint`,{method:"PUT",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},
+    body:JSON.stringify({step:2,messages:[],workspaceRef:{digest:"0".repeat(64),parts:1,size:4}})});
+  equal(invalid.status,409,"partial upload never advances checkpoint");
+  equal((await client.loadCheckpoint())?.step,1);
+  await api("POST",`/api/runs/${id}/cancel`);
 });
 
 wss.close();

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentChildrenResponse, AgentEventInput, AgentInboxMessage, AgentSpawnResponse,
   Checkpoint, EventKind, Job, JobResult, ModelRequest, ModelResponse, SpawnRequest,
@@ -115,8 +115,18 @@ export class PlaneClient {
     return res.checkpoint;
   }
 
-  saveCheckpoint(checkpoint: Checkpoint) {
-    return this.#request("PUT", "/agent/checkpoint", checkpoint);
+  async saveCheckpoint(checkpoint: Checkpoint) {
+    if (!checkpoint.workspace) return this.#request("PUT", "/agent/checkpoint", checkpoint);
+    const bytes = Buffer.from(JSON.stringify(checkpoint.workspace));
+    if (bytes.length > 64*1024*1024) throw new Error("workspace exceeds 64 MiB storage limit");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const data = bytes.toString("base64");
+    const chunkSize = 512*1024;
+    const parts = Math.ceil(data.length/chunkSize);
+    for (let part=0;part<parts;part++) await this.#request("PUT", `/agent/workspace-chunks/${digest}/${part}`,
+      { data: data.slice(part*chunkSize,(part+1)*chunkSize) });
+    const { workspace: _large, ...small } = checkpoint;
+    return this.#request("PUT", "/agent/checkpoint", { ...small, workspaceRef: { digest,size:bytes.length,parts } });
   }
 
   gitCredentials() {
