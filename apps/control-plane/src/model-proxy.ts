@@ -84,6 +84,9 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       return c.json({ error: "job is no longer running" }, 409);
     }
 
+    const codex = await credentialFor(handle, ctx.userId).catch(() => null);
+    if(!codex)return c.json({error:"Codex connection unavailable or expired; connect or retry before starting model work"},502);
+
     // Reserve a conservative input-byte bound plus output allowance before dispatch.
     // The Codex backend does not accept an output cap: a single response may still exceed this allowance.
     const tokenAllowance = Buffer.byteLength(JSON.stringify(parsed.data)) +
@@ -104,7 +107,6 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       });
     }
 
-    const codex = await credentialFor(handle, ctx.userId).catch(() => null);
     const router = new ModelRouter({
       budget: {
         maxRequests: Math.max(1, ctx.maxRequests - ctx.llmRequests),
@@ -184,6 +186,13 @@ export function createModelProxy(deps: { handle: DbHandle }) {
    * one is gone. Storing the transcript here is what lets a resumed job
    * continue rather than start the work over and pay for it twice.
    */
+  app.get("/agent/workspace-chunks/:digest/:part",async c=>{
+    const {jobId}=c.get("claims");const digest=c.req.param("digest");const part=Number(c.req.param("part"));
+    if(!/^[a-f0-9]{64}$/.test(digest)||!Number.isInteger(part)||part<0||part>=256)return c.json({error:"invalid chunk"},400);
+    const rows=await handle.raw<{body:{data:string}}>(`SELECT body FROM artifacts WHERE id=$1 AND job_id=$2`,[`chunk_${jobId}_${digest}_${part}`,jobId]);
+    return rows[0]?c.json(rows[0].body):c.json({error:"chunk unavailable"},404);
+  });
+
   app.put("/agent/workspace-chunks/:digest/:part", async (c) => {
     const {runId,jobId}=c.get("claims");
     const digest=c.req.param("digest"); const part=Number(c.req.param("part"));
@@ -217,19 +226,27 @@ export function createModelProxy(deps: { handle: DbHandle }) {
       parsed.data.workspace=workspace.data;
     }
     await handle.transaction(async (tx) => {
-      await tx(
+      const applied=await tx(
         `INSERT INTO artifacts (id, run_id, job_id, kind, body)
          VALUES ($1, $2, $3, 'checkpoint', $4)
-         ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body, created_at=now()`,
+         ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body, created_at=now()
+         WHERE COALESCE((artifacts.body->>'revision')::bigint,0)<=COALESCE((EXCLUDED.body->>'revision')::bigint,0)
+         RETURNING id`,
         [`ckpt_${jobId}`, runId, jobId, JSON.stringify(parsed.data)],
       );
+      if(!applied.length)return;
       if (parsed.data.workspace) await tx(
         `INSERT INTO artifacts (id,run_id,job_id,kind,body) VALUES ($1,$2,$3,'workspace.export',$4)
          ON CONFLICT (id) DO UPDATE SET body=EXCLUDED.body,created_at=now()`,
         [`workspace_${jobId}`, runId, jobId, JSON.stringify(parsed.data.workspace)],
       );
+      if(parsed.data.workspaceRef){
+        const ref=parsed.data.workspaceRef;
+        const current=Array.from({length:ref.parts},(_,i)=>`chunk_${jobId}_${ref.digest}_${i}`);
+        await tx(`DELETE FROM artifacts WHERE job_id=$1 AND kind='workspace.chunk' AND NOT(id=ANY($2))`,[jobId,current]);
+      }
     });
-    return c.json({ ok: true, step: parsed.data.step });
+    return c.json({ ok: true, step: parsed.data.step, checkpointVersion:2 });
   });
 
   app.get("/agent/checkpoint", async (c) => {
@@ -237,7 +254,11 @@ export function createModelProxy(deps: { handle: DbHandle }) {
     const rows = await handle.raw<{ body: Checkpoint }>(
       `SELECT body FROM artifacts WHERE id = $1`, [`ckpt_${jobId}`],
     );
-    return c.json({ checkpoint: rows[0]?.body ?? null });
+    const checkpoint=rows[0]?.body??null;
+    if(checkpoint?.workspaceRef&&c.req.header("x-kapi-chunked-workspace")==="1"){
+      const {workspace:_large,...small}=checkpoint;return c.json({checkpoint:small,checkpointVersion:2});
+    }
+    return c.json({ checkpoint,checkpointVersion:2 });
   });
 
   /* ----------------------------------------------------------------- */

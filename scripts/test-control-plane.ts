@@ -968,6 +968,27 @@ await test("large workspace uses resumable chunks and rejects incomplete manifes
     body:JSON.stringify({step:2,messages:[],workspaceRef:{digest:"0".repeat(64),parts:1,size:4}})});
   equal(invalid.status,409,"partial upload never advances checkpoint");
   equal((await client.loadCheckpoint())?.step,1);
+  const old=await fetch(`${base}/agent/checkpoint`,{method:"PUT",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({revision:0,step:0,messages:[]})});
+  equal(old.status,200);equal((await client.loadCheckpoint())?.step,1,"delayed older checkpoint cannot replace a newer revision");
+  await api("POST",`/api/runs/${id}/cancel`);
+});
+
+await test("event hub drops unwatched run caches when the last subscriber leaves",async()=>{
+  const hub=new EventHub(store,handle);
+  const remove=hub.add({id:"bounded",runId:"cache-fixture",send:()=>{}});
+  hub.publish({id:"cache-event",runId:"cache-fixture",jobId:null,seq:1,kind:"log",from:"test",to:null,payload:{},ts:new Date()});
+  equal(hub.cachedRunCount,1);remove();equal(hub.cachedRunCount,0);
+  hub.publish({id:"cache-event2",runId:"unwatched",jobId:null,seq:1,kind:"log",from:"test",to:null,payload:{},ts:new Date()});
+  equal(hub.cachedRunCount,0);await hub.close();
+});
+
+await test("an unavailable credential never consumes model budget before dispatch",async()=>{
+  const {runId:id,jobId}=await freshRun("credential unavailable");await claim(handle,{vmId:"vm-no-grant",jobId,runId:id});
+  const token=mintJobToken({jobId,runId:id,vmId:"vm-no-grant"});
+  const response=await fetch(`${base}/agent/model`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},
+    body:JSON.stringify({messages:[{role:"user",content:"hello"}]})});
+  equal(response.status,502);
+  const run=await store.getRun(id);equal(run?.llmRequests,0);equal(run?.llmTokens,0);
   await api("POST",`/api/runs/${id}/cancel`);
 });
 

@@ -14,3 +14,10 @@ One commit per numbered issue, validated before pushing to main.
 External actions cannot be made universally exactly-once: arbitrary repository shell commands may have
 external side effects. Interrupted unsafe commands must be reported for reconciliation rather than
 blindly re-executed. Provider-enforced token caps and live cloud verification remain dependent on provider capability/access.
+
+## Execution result
+
+All eight implementation/verification steps have dedicated commits on main. Local and PostgreSQL
+checks and mixed-duration fault soaks passed. See `EDGE_CASE_VERIFICATION.md` for evidence and the
+explicit external gates: live Codex sign-in and an active Daytona account. Per-tool recovery does
+not imply that an unacknowledged in-flight disk write survives destruction of the VM's disk.

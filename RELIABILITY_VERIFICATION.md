@@ -101,3 +101,7 @@ strict provider token ceiling. Crashed/unknown calls intentionally retain conser
 Apply database migrations before updating production API/worker processes. All replicas sharing
 one deployment database must use identical capacity settings. Defaults: 32 global VMs, 8 per user,
 4 provider startups per worker, 1 model call per run and 2 per user.
+
+The subsequent eight-case hardening is recorded in [EDGE_CASE_VERIFICATION.md](./EDGE_CASE_VERIFICATION.md).
+It supersedes the original 1 MB transport limit and adds tool journaling, cancellation, refresh
+serialization, uncertainty reconciliation, provider-ambiguity handling and mixed-duration fault soaks.

@@ -23,6 +23,7 @@ export function attachWebSocket(
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname !== "/ws") return reject(socket, 404, "not found");
+      if(hub.clientCount>=Number(process.env.KAPI_MAX_WS_CLIENTS??1000))return reject(socket,503,"websocket capacity reached");
       const origin = req.headers.origin;
       if (origin && !isAllowedBrowserOrigin(origin)) return reject(socket, 403, "origin not allowed");
       let principal;
@@ -33,6 +34,8 @@ export function attachWebSocket(
       if (runId && await deps.store.runOwner(runId) !== principal.userId) {
         return reject(socket, 404, "run not found");
       }
+      // Recheck after asynchronous authentication/ownership reads, immediately before registration.
+      if(hub.clientCount>=Number(process.env.KAPI_MAX_WS_CLIENTS??1000))return reject(socket,503,"websocket capacity reached");
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
     })().catch(() => reject(socket, 500, "upgrade failed"));
   });
@@ -43,7 +46,7 @@ export function attachWebSocket(
     const raw = Number(url.searchParams.get("cursor") ?? 0);
     const cursor = Number.isFinite(raw) && raw > 0 ? raw : 0;
 
-    const client = { id: newId("ws"), runId, send: (data: string) => {
+    const client = { id: newId("ws"), runId, close:()=>socket.close(1013,"replay buffer full; reconnect with cursor"), send: (data: string) => {
       if (socket.bufferedAmount > 1024 * 1024) { socket.close(1013, "client too slow; reconnect with cursor"); return; }
       if (socket.readyState === socket.OPEN) socket.send(data);
     } };

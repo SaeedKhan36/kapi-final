@@ -6,6 +6,7 @@ export type Client = {
   /** Watch one run, or null for every active run. */
   runId: string | null;
   send: (data: string) => void;
+  close?: () => void;
 };
 
 type ClientState = {
@@ -65,6 +66,13 @@ export class EventHub {
   }
 
   get clientCount() { return this.#clients.size; }
+  get cachedRunCount() { return this.#cursors.size; }
+  #watched(id:string){return [...this.#clients.values()].some(s=>s.client.runId===id||s.client.runId===null);}
+  #prune(){
+    const explicit=new Set([...this.#clients.values()].map(s=>s.client.runId).filter(Boolean));
+    for(const id of this.#cursors.keys())if(!this.#watched(id)||(this.#cursors.size>1000&&!explicit.has(id))){this.#cursors.delete(id);this.#buffered.delete(id);}
+    if(!this.#clients.size){this.#buffered.clear();this.#dirty.clear();}
+  }
 
   add(client: Client): () => void {
     this.#clients.set(client.id, {
@@ -76,6 +84,7 @@ export class EventHub {
     this.#ensurePolling();
     return () => {
       this.#clients.delete(client.id);
+      this.#prune();
       if (this.#clients.size === 0) this.#stopPolling();
     };
   }
@@ -93,6 +102,7 @@ export class EventHub {
     let count = 0;
     let after = afterSeq;
     for (;;) {
+      if(this.#closed||!this.#clients.has(client.id))return state.cursors.get(runId)??afterSeq;
       const events = await this.store.listEvents(runId, after, 1000);
       for (const event of events) if (this.#sendNow(state, event)) count++;
       after = events.at(-1)?.seq ?? after;
@@ -129,13 +139,14 @@ export class EventHub {
     if (this.#closed) return;
     try {
       const parsed = JSON.parse(payload) as { runId?: string; seq?: number };
-      if (!parsed.runId || !Number.isFinite(parsed.seq)) return;
+      if (!parsed.runId || !Number.isFinite(parsed.seq) || !this.#watched(parsed.runId)) return;
       if ((parsed.seq ?? 0) <= (this.#cursors.get(parsed.runId) ?? 0)) return;
       await this.#requestDrain(parsed.runId);
     } catch { /* polling remains the recovery path */ }
   }
 
   #ingest(event: EventRow) {
+    if(!this.#watched(event.runId))return;
     const cursor = this.#cursors.get(event.runId) ?? 0;
     if (event.seq <= cursor) return;
     if (event.seq !== cursor + 1) {
@@ -161,6 +172,7 @@ export class EventHub {
     this.#buffered.get(event.runId)?.delete(event.seq);
     this.#cursors.set(event.runId, event.seq);
     this.#fanOut(event);
+    if(this.#cursors.size>1000)this.#prune();
   }
 
   #fanOut(event: EventRow) {
@@ -171,6 +183,7 @@ export class EventHub {
         if (state.replaying.has(event.runId)) {
           const pending = state.buffered.get(event.runId) ?? new Map<number, EventRow>();
           pending.set(event.seq, event);
+          if(pending.size>2000){client.close?.();this.#clients.delete(client.id);continue;}
           state.buffered.set(event.runId, pending);
         } else {
           this.#sendNow(state, event, frame);
@@ -184,6 +197,7 @@ export class EventHub {
     try {
       state.client.send(frame ?? JSON.stringify({ kind: "event", event }));
       state.cursors.set(event.runId, event.seq);
+      if(state.client.runId===null&&state.cursors.size>1000)state.cursors.delete(state.cursors.keys().next().value!);
       return true;
     } catch {
       this.#clients.delete(state.client.id);
@@ -211,6 +225,7 @@ export class EventHub {
   }
 
   #requestDrain(runId: string): Promise<void> {
+    if(!this.#watched(runId))return Promise.resolve();
     this.#dirty.add(runId);
     const active = this.#drains.get(runId);
     if (active) return active;
@@ -218,6 +233,7 @@ export class EventHub {
     const drain = (async () => {
       while (this.#dirty.delete(runId)) {
         for (;;) {
+          if(!this.#watched(runId))break;
           const since = this.#cursors.get(runId) ?? 0;
           const events = await this.store.listEvents(runId, since, 200);
           for (const event of events) this.#ingest(event);

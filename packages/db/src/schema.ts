@@ -238,7 +238,7 @@ export const artifacts = pgTable(
     body: jsonb("body").$type<ReviewVerdict | Record<string, unknown>>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("artifacts_run_idx").on(t.runId, t.kind)],
+  (t) => [index("artifacts_run_idx").on(t.runId, t.kind), index("artifacts_kind_created_idx").on(t.kind,t.createdAt)],
 );
 
 /* ------------------------------------------------------------------ */

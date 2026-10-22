@@ -28,7 +28,8 @@ await test("restart resumes persisted tool decisions and never blindly repeats a
     onCheckpoint:async c=>{if(c.pending?.next===1)throw Error("VM lost before result acknowledgement");saved=structuredClone(c);}});}catch{}
   equal(executions,1);
   const result=await runLoop({system:"",brief:"",ctx,tools,resumeFrom:saved,callModel:async()=>{throw Error("must resume saved decision");}});
-  equal(result.ok,true);equal(executions,1,"uncertain external command was not replayed");
+  equal(result.ok,false);equal(executions,1,"uncertain external command was not replayed");
+  equal(result.summary.includes("requires reconciliation"),true,"does not run the pending finish tool or claim success");
 });
 await test("completed terminal checkpoint reports success without another model call",async()=>{
   const result=await runLoop({system:"",brief:"",ctx,tools:[],resumeFrom:{step:2,messages:[],summary:"",commits:[],filesTouched:[],finished:true,resultSummary:"already done"},callModel:async()=>{throw Error("no new model call");}});

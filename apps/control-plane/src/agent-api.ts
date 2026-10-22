@@ -1,3 +1,4 @@
+import { HTTPException } from "hono/http-exception";
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { retryDeadlockedTransaction, type DbHandle } from "@kapi/db";
@@ -283,7 +284,7 @@ export function createAgentApi(deps: {
       if (operationId) {
         const saved = await tx<{body: {fingerprint:string;response:AgentSpawnResponse}}>(`SELECT body FROM artifacts WHERE id=$1`, [operationId]);
         if (saved[0]) {
-          if (saved[0].body.fingerprint !== fingerprint) throw new Error("idempotency key reused with different spawn payload");
+          if (saved[0].body.fingerprint !== fingerprint) throw new HTTPException(409,{message:"idempotency key reused with different spawn payload"});
           return { before: Number(run.event_seq), ...saved[0].body.response };
         }
       }

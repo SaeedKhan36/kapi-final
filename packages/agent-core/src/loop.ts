@@ -121,11 +121,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
   let summary = resumeFrom?.resultSummary ?? "";
   let finished = resumeFrom?.finished ?? false;
   let pending = resumeFrom?.pending;
+  let blockedReason=resumeFrom?.blockedReason;
   const checkpoint = async () => onCheckpoint?.({step,messages,summary:"",branch,commits,
-    filesTouched:[...filesTouched],pending,finished,resultSummary:summary,prUrl,terminalMeta});
-  let stopped: string | null = null;
+    filesTouched:[...filesTouched],pending,finished,resultSummary:summary,prUrl,terminalMeta,blockedReason});
+  let stopped: string | null = blockedReason??null;
 
   while ((step < maxSteps || pending) && !finished) {
+    if (stopped) break;
     if (!alive()) { stopped = "lease lost or job cancelled"; break; }
     if (!pending) step++;
 
@@ -204,12 +206,13 @@ export async function runLoop(opts: LoopOptions): Promise<LoopOutcome> {
       const interrupted = pending.started;
       pending.started = true;
       await checkpoint();
+      if(interrupted&&["run_command","run_tests"].includes(tool.name)){
+        blockedReason="Interrupted command requires reconciliation: its external effects are unknown; no later tools were executed.";
+        stopped=blockedReason;await checkpoint();break;
+      }
       let outcome;
       try {
-        // Arbitrary shell/test commands may affect external services. Never blindly replay an interrupted one.
-        outcome = interrupted && ["run_command","run_tests"].includes(tool.name)
-          ? {ok:false,output:"Interrupted action: execution status is unknown. It was not replayed. Inspect and reconcile its effects before issuing a new command."}
-          : await withToolSignal(ctx.signal, () => tool.run(input, ctx));
+        outcome = await withToolSignal(ctx.signal, () => tool.run(input, ctx));
       } catch (err) {
         // A throwing tool must not kill the job. The agent is told and can
         // route around it, which is what a human engineer would do.

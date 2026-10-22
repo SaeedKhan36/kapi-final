@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-10-21T07:28:52.279Z",
+  "runtime": {
+    "node": "v24.11.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "logicalCpus": 10,
+    "memoryGiB": 16
+  },
+  "workload": "synthetic echo agents; no AI, GitHub, or Daytona",
+  "database": "PostgreSQL",
+  "users": 10,
+  "runsPerUser": 40,
+  "rounds": 4,
+  "delayMs": 250,
+  "chaos": true,
+  "injectedApiFailures": 26,
+  "ambiguousCreations": 27,
+  "workerRetries": 100,
+  "completed": 400,
+  "elapsedSeconds": 58.59974779099999,
+  "jobsPerSecond": 6.825967944889923,
+  "peakAllocatedResources": 8,
+  "limits": {
+    "global": 8,
+    "perUser": 2
+  },
+  "peakControlPlaneHeapMiB": 75.7110366821289,
+  "peakCachedRuns": 40,
+  "websocketSamples": 350,
+  "eventToSocketP95Ms": 4,
+  "queueDelayP95Ms": 39305.762,
+  "healthLatencyP95Ms": 2.2341660000020056,
+  "resourcesRemaining": 0
+}

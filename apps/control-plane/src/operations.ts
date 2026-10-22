@@ -37,6 +37,8 @@ export function startOperations(deps: {
   const reclaimTimer = setInterval(() => void (async () => {
     await accounting.settle();
     await settleExpiredModelCalls(handle);
+    // Completed snapshots live inline in their checkpoint/export. Abandoned upload chunks are disposable.
+    await pruneWorkspaceUploads(handle);
     await provisioner.reclaim();
   })().catch(() => {}), 30_000);
   reclaimTimer.unref?.();
@@ -50,4 +52,11 @@ export function startOperations(deps: {
       await provisioner.destroyAll().catch(() => {});
     },
   };
+}
+
+export async function pruneWorkspaceUploads(handle:DbHandle){
+  return handle.raw(`DELETE FROM artifacts WHERE id IN (
+    SELECT a.id FROM artifacts a WHERE a.kind='workspace.chunk' AND a.created_at<now()-interval '1 day'
+    AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=a.job_id AND j.status IN ('queued','claimed','running')) LIMIT 100
+  ) RETURNING id`);
 }

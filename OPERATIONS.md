@@ -179,8 +179,11 @@ under a shared SQL admission lock. All API replicas enforce per-run and per-user
 (default 1 and 2). Busy admission returns a retryable 429; insufficient unreserved budget is terminal.
 Successful calls settle actual usage atomically. Failed calls with unknown usage charge the full
 reservation; crashed processes leave reservations in place so their unknown spend is never refunded.
-Expired reservations stop occupying concurrency slots, but still occupy the run's token budget.
-Do not delete these rows to free capacity without reconciling provider usage.
+Expired reservations stop occupying concurrency slots. The operations worker moves them into
+conservative `model.usage` receipts without refunding their budget. The `kapi_model_estimated_usage`
+metric identifies unresolved estimates. Reconcile externally verified usage with
+`pnpm reconcile:model <call-id> <actual-tokens> <provider-evidence-reference>`; late measured responses
+also replace estimates idempotently. Never delete reservations or receipts to manufacture capacity.
 
 The Codex backend does not accept `max_output_tokens`. A reservation therefore cannot guarantee a
 strict provider token ceiling: one response can exceed its reserved allowance. Such usage is fully
@@ -200,3 +203,25 @@ Candidates prioritize users with fewer allocated resources, then round-robin pos
 user's queue, then job priority and age. `KAPI_PROVISION_CONCURRENCY` (default 4) bounds simultaneous
 provider startups per worker; authoritative resource limits apply across all workers. Failed starts
 retain resource references until deletion is confirmed before another attempt can reserve that job.
+
+
+### Interrupted commands and ambiguous creation
+
+Tool intentions and results are durable individually. Child creation is deduplicated by job-scoped
+request IDs; GitHub PR creation reconciles branch/base pairs. Arbitrary shell/test commands cannot
+be universally exactly-once. If a VM dies with one in flight, recovery records a reconciliation block
+and does not run subsequent tools or report success. Inspect its external effects before starting a
+new, explicitly reconciled job. The original checkpoint remains available for investigation.
+
+A provider create timeout or lost response retains its reservation and quota. `reservationId` labels
+allow inventory to attach the actual resource ID for deletion before retry. Normal startup and
+request deadlines are separate. When a healthy inventory still finds no resource after the grace
+window, the reservation is released; extremely late resources remain labelled for orphan cleanup.
+Inventory failures never count as proof of absence. Provider consistency and API availability still
+require live staging checks. Apply migrations before deploying this code.
+
+WebSocket cursors for unwatched runs are pruned, global debug caches are capped, slow replay buffers
+are disconnected for cursor-based resume, and `KAPI_MAX_WS_CLIENTS` bounds per-process connections.
+Historical events remain durable; they are not silently deleted. Abandoned upload chunks older than
+one day are removed in bounded batches when the job is no longer running. Current workspace exports
+remain available independently of those upload chunks.

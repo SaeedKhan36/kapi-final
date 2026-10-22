@@ -1,3 +1,4 @@
+import { pruneWorkspaceUploads } from "../apps/control-plane/src/operations.ts";
 import { createDb, truncateAll, type DbHandle } from "@kapi/db";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -448,6 +449,15 @@ await test("a provider-reported stopped VM releases its active agent row", async
   );
   equal(rows[0]?.status, "resource-stopped", "the reason is retained");
   assert(rows[0]?.stopped_at != null, "the reservation is released");
+});
+
+await test("upload retention preserves queued recovery and durable exports",async()=>{
+  const thread=await store.createThread(project.id,"upload retention");const started=await runs.start({thread,project,goal:"retention"});
+  for(const kind of ["workspace.chunk","workspace.export"])await handle.raw(`INSERT INTO artifacts(id,run_id,job_id,kind,body,created_at) VALUES($1,$2,$3,$4,'{}',now()-interval '2 days')`,[`retention_${kind}`,started.run.id,started.job.id,kind]);
+  equal((await pruneWorkspaceUploads(handle)).length,0,"queued job retains resumable chunks");
+  await handle.raw(`UPDATE jobs SET status='cancelled' WHERE id=$1`,[started.job.id]);
+  equal((await pruneWorkspaceUploads(handle)).length,1,"old upload chunks removed in a bounded pass");
+  const exports=await handle.raw(`SELECT id FROM artifacts WHERE id='retention_workspace.export'`);equal(exports.length,1,"user output remains durable");
 });
 
 await handle.close();

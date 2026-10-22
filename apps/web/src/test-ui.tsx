@@ -1,3 +1,4 @@
+import { applyEvent, emptyRunState } from "./lib/agents.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AgentTree } from "./components/AgentTree.tsx";
 import { BudgetMeter } from "./components/RunPanel.tsx";
@@ -83,6 +84,14 @@ await test("client links preserve native anchor attributes", () => {
   const html = renderToStaticMarkup(<Link to="/projects/prj_test" aria-label="Back to project">←</Link>);
   assert(html.includes('aria-label="Back to project"'), "accessible labels reach the anchor");
   assert(html.includes('href="/projects/prj_test"'), "the navigation target remains intact");
+});
+
+await test("long agent traces retain a bounded recent activity window",async()=>{
+  let state=emptyRunState();
+  state.nodes.job_root=node({});state.order=["job_root"];
+  for(let seq=1;seq<=2000;seq++)state=applyEvent(state,{id:`event-${seq}`,runId:"run",jobId:"job_root",seq,kind:"log",from:"agent:job_root",to:null,payload:{message:`line ${seq}`},ts:new Date().toISOString()});
+  assert(state.nodes.job_root!.activity.length>0&&state.nodes.job_root!.activity.length<=500,"bounded trace history");
+  assert(state.nodes.job_root!.activity.at(-1)?.seq===2000,"newest activity retained");
 });
 
 report();

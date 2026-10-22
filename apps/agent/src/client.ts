@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
+import { WorkspaceSnapshotSchema } from "@kapi/protocol";
 import type {
   AgentChildrenResponse, AgentEventInput, AgentInboxMessage, AgentSpawnResponse,
   Checkpoint, EventKind, Job, JobResult, ModelRequest, ModelResponse, SpawnRequest,
@@ -15,6 +16,8 @@ import type {
 export class PlaneClient {
   #queue: AgentEventInput[] = [];
   #flushing: Promise<void> | null = null;
+  #revision=0;
+  #uploadedDigest:string|undefined;
 
   constructor(
     private baseUrl: string,
@@ -48,6 +51,7 @@ export class PlaneClient {
           signal: signal?AbortSignal.any([signal,AbortSignal.timeout(path==="/agent/model"?180_000:30_000)]):AbortSignal.timeout(30_000),
           headers: {
             authorization: `Bearer ${this.token}`,
+            ...(method==="GET"&&path==="/agent/checkpoint"?{"x-kapi-chunked-workspace":"1"}:{}),
             ...(body !== undefined ? { "content-type": "application/json" } : {}),
           },
           body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -114,22 +118,44 @@ export class PlaneClient {
   }
 
   async loadCheckpoint(): Promise<Checkpoint | null> {
-    const res = await this.#request<{ checkpoint: Checkpoint | null }>("GET", "/agent/checkpoint");
-    return res.checkpoint;
+    const res = await this.#request<{ checkpoint: Checkpoint | null; checkpointVersion?:number }>("GET", "/agent/checkpoint");
+    if(res.checkpointVersion!==2)throw Error("control plane upgrade required for durable tool checkpoints");
+    const checkpoint=res.checkpoint;
+    this.#revision=Math.max(this.#revision,checkpoint?.revision??0);
+    if(checkpoint?.workspaceRef&&!checkpoint.workspace){
+      const ref=checkpoint.workspaceRef;const chunks:string[]=[];
+      for(let part=0;part<ref.parts;part++){
+        const chunk=await this.#request<{data:string}>("GET",`/agent/workspace-chunks/${ref.digest}/${part}`);
+        chunks.push(chunk.data);
+      }
+      const bytes=Buffer.from(chunks.join(""),"base64");
+      if(bytes.length!==ref.size||createHash("sha256").update(bytes).digest("hex")!==ref.digest)throw Error("workspace download checksum mismatch");
+      checkpoint.workspace=WorkspaceSnapshotSchema.parse(JSON.parse(bytes.toString("utf8")));
+      this.#uploadedDigest=ref.digest;
+    }
+    return checkpoint;
+  }
+
+  async #persistCheckpoint(checkpoint:unknown){
+    const ack=await this.#request<{checkpointVersion?:number}>("PUT","/agent/checkpoint",checkpoint);
+    if(ack.checkpointVersion!==2)throw Error("control plane did not acknowledge durable checkpoint protocol");
+    return ack;
   }
 
   async saveCheckpoint(checkpoint: Checkpoint) {
-    if (!checkpoint.workspace) return this.#request("PUT", "/agent/checkpoint", checkpoint);
+    checkpoint={...checkpoint,revision:++this.#revision};
+    if (!checkpoint.workspace) return this.#persistCheckpoint(checkpoint);
     const bytes = Buffer.from(JSON.stringify(checkpoint.workspace));
     if (bytes.length > 64*1024*1024) throw new Error("workspace exceeds 64 MiB storage limit");
     const digest = createHash("sha256").update(bytes).digest("hex");
     const data = bytes.toString("base64");
     const chunkSize = 512*1024;
     const parts = Math.ceil(data.length/chunkSize);
-    for (let part=0;part<parts;part++) await this.#request("PUT", `/agent/workspace-chunks/${digest}/${part}`,
+    for (let part=0;this.#uploadedDigest!==digest&&part<parts;part++) await this.#request("PUT", `/agent/workspace-chunks/${digest}/${part}`,
       { data: data.slice(part*chunkSize,(part+1)*chunkSize) });
+    this.#uploadedDigest=digest;
     const { workspace: _large, ...small } = checkpoint;
-    return this.#request("PUT", "/agent/checkpoint", { ...small, workspaceRef: { digest,size:bytes.length,parts } });
+    return this.#persistCheckpoint({ ...small, workspaceRef: { digest,size:bytes.length,parts } });
   }
 
   gitCredentials() {

@@ -47,7 +47,8 @@
     "test:load:local": "pnpm build:agent && tsx scripts/load-local-fleet.ts",
     "test:admission": "tsx scripts/test-admission.ts && tsx scripts/test-provision-capacity.ts",
     "test:live:local": "tsx scripts/probe-local-lifecycle.ts",
-    "reconcile:model": "tsx scripts/reconcile-model-usage.ts"
+    "reconcile:model": "tsx scripts/reconcile-model-usage.ts",
+    "test:soak:local": "KAPI_LOAD_USERS=10 KAPI_LOAD_RUNS_PER_USER=10 KAPI_LOAD_ROUNDS=4 KAPI_LOAD_DELAY_MS=250 KAPI_LOAD_CHAOS=true pnpm test:load:local"
   },
   "devDependencies": {
     "@hono/node-server": "^1.13.7",

@@ -93,7 +93,7 @@ pnpm restore:workspace /path/to/workspace.json /path/to/fresh-clone
 ```
 
 The export records `publication: local|published`; finishing a local task does not imply a PR exists.
-Snapshots are limited to 1 MB to leave room for the transcript in the default 2 MiB API body limit.
+Snapshots use checksummed 512 KiB upload chunks and are bounded to 64 MiB of serialized workspace data; individual requests stay below the default 2 MiB API body limit.
 Oversized or failed snapshots stop the Build rather than advancing an unrestorable transcript.
 Changes made after the last acknowledged checkpoint cannot be recovered after an abrupt VM loss.
 
@@ -103,3 +103,12 @@ See [RELIABILITY_VERIFICATION.md](./RELIABILITY_VERIFICATION.md) for the execute
 checks, saved synthetic-load samples and the remaining live integration gate. `pnpm test:load:local`
 uses real local agent processes with an echo role; `pnpm test:live:local` uses the connected user's
 real model and GitHub installation and creates a documentation PR on the explicitly selected project.
+
+
+### Edge-case fault and soak checks
+
+`pnpm test:soak:local` runs 400 mixed-duration synthetic jobs with first-attempt worker failures,
+a simulated API outage and ambiguous provider responses. It measures real WebSocket delivery,
+queue delay and control-plane heap while checking global/per-user caps and final resource cleanup.
+Use an explicit local `DATABASE_URL` for PostgreSQL contention; unset it for embedded PGlite.
+The fixture uses scripted/echo behavior, not live AI or Daytona. See `EDGE_CASE_VERIFICATION.md`.

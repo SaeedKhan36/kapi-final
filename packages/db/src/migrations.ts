@@ -92,6 +92,9 @@ export const MIGRATIONS: readonly Migration[] = [
     ALTER TABLE agents ADD COLUMN IF NOT EXISTS reservation_id TEXT;
     CREATE INDEX IF NOT EXISTS agents_reservation_idx ON agents(reservation_id);
   `},
+  {version:6,name:"workspace-upload-retention-index",sql:`
+    CREATE INDEX IF NOT EXISTS artifacts_kind_created_idx ON artifacts(kind,created_at);
+  `},
 ];
 
 export async function runMigrations(handle: DbHandle): Promise<void> {

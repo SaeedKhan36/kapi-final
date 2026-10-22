@@ -142,7 +142,7 @@ export const captainRole: RoleHandler = async (rc) => {
   const prepared = await prepareRepo(ctx, creds, { repoUrl, baseBranch, readOnly: true });
   client.log(prepared.ok ? prepared.detail : `could not clone: ${prepared.detail}`);
 
-  const resumeFrom = await client.loadCheckpoint().catch(() => null);
+  const resumeFrom = await client.loadCheckpoint();
 
   const brief = context.brief ?? captainBrief({
     goal: job.payload.instruction,
@@ -346,7 +346,7 @@ export const reviewRole: RoleHandler = async (rc) => {
   }
   client.log(`reviewing ${targetBranch} against ${baseBranch}`);
 
-  const resumeFrom = await client.loadCheckpoint().catch(() => null);
+  const resumeFrom = await client.loadCheckpoint();
   const brief = context.brief ?? reviewBrief({
     instruction: job.payload.instruction,
     acceptance: job.payload.acceptance,
@@ -406,6 +406,11 @@ export const reviewRole: RoleHandler = async (rc) => {
 
 /** Deterministic test-only role that exercises bootstrap without a model. */
 export const echoRole: RoleHandler = async ({ job, client, workdir, alive }) => {
+  // Test-only fault profile; production handlerFor never selects this role.
+  const delay=Math.max(0,Math.min(10_000,Number(job.payload.context.testDelayMs??0)));
+  if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
+  if(job.payload.context.testFailFirst===true&&job.attempts===1)
+    return {ok:false,summary:"injected transient worker failure",filesChanged:[],commits:[]};
   client.log(`agent online for ${job.kind}/${job.role}`, { workdir });
   client.emit("tool.call", { tool: "echo", args: { instruction: job.payload.instruction } });
   await client.flush();

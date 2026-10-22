@@ -75,6 +75,8 @@ export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>;
 
 /** Loop state persisted to the plane so a requeued job resumes on a new VM. */
 export const CheckpointSchema = z.object({
+  revision: z.number().int().nonnegative().optional(),
+  blockedReason: z.string().optional(),
   pending: z.object({ response: ModelResponseSchema, next: z.number().int().nonnegative(),
     started: z.boolean(), results: z.array(z.unknown()) }).optional(),
   finished: z.boolean().optional(),
